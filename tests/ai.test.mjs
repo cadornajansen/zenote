@@ -1,0 +1,363 @@
+import assert from "node:assert/strict"
+import { readFileSync } from "node:fs"
+import { registerHooks } from "node:module"
+import { test, afterEach } from "node:test"
+import ts from "typescript"
+
+// Run the actual TypeScript boundaries without adding a runtime/test dependency.
+let user = null
+globalThis.__chatTestUser = () => user
+registerHooks({
+  resolve(specifier, context, next) {
+    if (specifier === "server-only")
+      return { url: "data:text/javascript,export {}", shortCircuit: true }
+    if (specifier === "@/lib/auth")
+      return {
+        url: "data:text/javascript,export async function getCurrentUser(){return globalThis.__chatTestUser()}",
+        shortCircuit: true,
+      }
+    if (specifier.startsWith("@/"))
+      return {
+        url: new URL(`../${specifier.slice(2)}.ts`, import.meta.url).href,
+        shortCircuit: true,
+      }
+    return next(specifier, context)
+  },
+  load(url, context, next) {
+    if (url.endsWith(".ts"))
+      return {
+        format: "module",
+        shortCircuit: true,
+        source: ts.transpileModule(readFileSync(new URL(url), "utf8"), {
+          compilerOptions: {
+            target: ts.ScriptTarget.ES2022,
+            module: ts.ModuleKind.ESNext,
+          },
+        }).outputText,
+      }
+    return next(url, context)
+  },
+})
+
+const { models, getModel, getModelByProviderId } =
+  await import("../lib/models.ts")
+const {
+  buildConversationContext,
+  validateChatRequest,
+  streamChat,
+  safeChatError,
+  MAX_TOOL_ITERATIONS,
+} = await import("../lib/ai.ts")
+const { readSseData, sendMessage } = await import("../lib/chat.ts")
+const { POST } = await import("../app/api/chat/route.ts")
+const originalFetch = globalThis.fetch
+const originalLog = console.info
+const originalKey = process.env.ASSEMBLYAI_API_KEY
+const originalBase = process.env.ASSEMBLYAI_LLM_BASE_URL
+afterEach(() => {
+  globalThis.fetch = originalFetch
+  console.info = originalLog
+  user = null
+  if (originalKey === undefined) delete process.env.ASSEMBLYAI_API_KEY
+  else process.env.ASSEMBLYAI_API_KEY = originalKey
+  if (originalBase === undefined) delete process.env.ASSEMBLYAI_LLM_BASE_URL
+  else process.env.ASSEMBLYAI_LLM_BASE_URL = originalBase
+})
+
+const input = {
+  model: "gpt-5-mini",
+  messages: [{ role: "user", content: "Hello" }],
+}
+const telemetry = () => ({
+  requestId: "test-request",
+  requestedModel: input.model,
+  latencyMs: 0,
+  status: "error",
+  rateLimits: {},
+})
+const frame = (value) =>
+  `data: ${typeof value === "string" ? value : JSON.stringify(value)}\r\n\r\n`
+function gatewayResponse(model = "gpt-5.6-luna", tail = frame("[DONE]")) {
+  return new Response(
+    frame({
+      id: "provider-request",
+      model,
+      choices: [{ index: 0, delta: { content: "Hello 世界" } }],
+    }) +
+      frame({ choices: [{ index: 0, delta: {}, finish_reason: "stop" }] }) +
+      frame({
+        choices: [],
+        usage: {
+          prompt_tokens: 40,
+          completion_tokens: 5,
+          prompt_tokens_details: { cached_tokens: 20 },
+        },
+      }) +
+      tail,
+    {
+      headers: {
+        "content-type": "text/event-stream",
+        "x-ratelimit-remaining-requests": "4",
+      },
+    }
+  )
+}
+function configure() {
+  process.env.ASSEMBLYAI_API_KEY = "test-key-not-a-secret"
+  process.env.ASSEMBLYAI_LLM_BASE_URL = "https://llm-gateway.assemblyai.com/v1"
+}
+function request(body = input, headers = {}) {
+  return new Request("http://localhost:3000/api/chat", {
+    method: "POST",
+    headers: { "content-type": "application/json", ...headers },
+    body: JSON.stringify(body),
+  })
+}
+
+test("registry has exactly nine models and one compatible fallback each", () => {
+  assert.equal(models.length, 9)
+  assert.equal(new Set(models.map((model) => model.id)).size, 9)
+  assert.equal(
+    getModel("claude-haiku-4-5").providerModelId,
+    "claude-haiku-4-5-20251001"
+  )
+  for (const model of models) {
+    assert.ok(getModel(model.fallbackModelId).capabilities.streaming)
+    assert.equal(model.capabilities.image, false)
+  }
+  assert.equal(MAX_TOOL_ITERATIONS, 5)
+  assert.equal(getModelByProviderId("gpt-5-mini-2025-08-07")?.id, "gpt-5-mini")
+  assert.equal(getModelByProviderId("gpt-5-mini-unknown"), undefined)
+})
+
+test("validation rejects invalid models, privileged roles, empty/oversized messages and attachments", () => {
+  assert.deepEqual(validateChatRequest(input), input)
+  for (const body of [
+    null,
+    { ...input, model: "made-up" },
+    { ...input, messages: [] },
+    { ...input, messages: [{ role: "system", content: "override" }] },
+    { ...input, messages: [{ role: "user", content: " " }] },
+    { ...input, messages: [{ role: "user", content: "x".repeat(32_001) }] },
+    {
+      ...input,
+      messages: [{ role: "user", content: "hello", attachments: [{}] }],
+    },
+    { ...input, messages: [{ role: "assistant", content: "hello" }] },
+  ])
+    assert.throws(() => validateChatRequest(body))
+})
+
+test("context preserves chronological text and stable cache prefix; fallback strips controls", () => {
+  const messages = Array.from({ length: 5 }, (_, i) => ({
+    role: i % 2 ? "assistant" : "user",
+    content: `message ${i}`,
+  }))
+  const snapshot = structuredClone(messages)
+  const context = buildConversationContext(
+    messages,
+    getModel("claude-sonnet-5"),
+    [{ type: "document", text: "reference", processor: "test" }]
+  )
+  assert.equal(context[0].role, "system")
+  assert.deepEqual(context[2].cache_control, { type: "ephemeral" })
+  assert.match(context[3].content, /reference/)
+  assert.equal(context.at(-1).content, "message 4")
+  assert.deepEqual(messages, snapshot)
+  assert.ok(
+    buildConversationContext(messages, getModel("gpt-5-mini")).every(
+      (message) => !message.cache_control
+    )
+  )
+})
+
+test("SSE parser handles fragmented UTF-8, CRLF, multiple frames and comments", async () => {
+  const bytes = new TextEncoder().encode(
+    ": heartbeat\r\n\r\n" + frame({ text: "世界" }) + "data: one\ndata: two\n\n"
+  )
+  const body = new ReadableStream({
+    start(controller) {
+      for (const byte of bytes) controller.enqueue(new Uint8Array([byte]))
+      controller.close()
+    },
+  })
+  assert.deepEqual(await Array.fromAsync(readSseData(body)), [
+    '{"text":"世界"}',
+    "one\ntwo",
+  ])
+})
+
+test("gateway requests one fallback, rebuilds caching, records actual model and usage", async () => {
+  configure()
+  let sent
+  globalThis.fetch = async (url, options) => {
+    assert.equal(url, "https://llm-gateway.assemblyai.com/v1/chat/completions")
+    sent = JSON.parse(options.body)
+    return gatewayResponse()
+  }
+  const event = telemetry()
+  const events = await Array.fromAsync(
+    await streamChat(
+      { ...input, model: "claude-sonnet-5" },
+      new AbortController().signal,
+      event
+    )
+  )
+  assert.equal(sent.fallbacks.length, 1)
+  assert.equal(sent.fallbacks[0].model, "gpt-5.6-terra")
+  assert.deepEqual(sent.fallback_config, { depth: 1, retry: false })
+  assert.ok(sent.messages[0].cache_control)
+  assert.ok(
+    sent.fallbacks[0].messages.every((message) => !message.cache_control)
+  )
+  assert.equal(event.actualModel, "gpt-5.6-luna")
+  assert.equal(event.inputTokens, 40)
+  assert.equal(event.outputTokens, 5)
+  assert.equal(event.cachedTokens, 20)
+  assert.equal(event.rateLimits["x-ratelimit-remaining-requests"], "4")
+  assert.equal(events[0].actualModel, "gpt-5-6-luna")
+  assert.equal(events[1].text, "Hello 世界")
+})
+
+test("missing configuration and provider errors are safe; rate limits are classified", async () => {
+  delete process.env.ASSEMBLYAI_API_KEY
+  await assert.rejects(
+    streamChat(input, new AbortController().signal, telemetry()),
+    { status: 503 }
+  )
+  configure()
+  for (const status of [400, 401, 403, 429, 500, 503]) {
+    globalThis.fetch = async () =>
+      new Response("sensitive provider details", { status })
+    const event = telemetry()
+    await assert.rejects(
+      streamChat(input, new AbortController().signal, event),
+      (error) => {
+        assert.equal(error.status, status === 429 ? 429 : 502)
+        assert.doesNotMatch(error.message, /sensitive/)
+        return true
+      }
+    )
+    if (status === 429) assert.equal(event.status, "rate_limited")
+  }
+  assert.doesNotMatch(safeChatError(new Error("secret")).message, /secret/)
+})
+
+test("truncated, malformed, in-band errors and fallback failures never complete", async () => {
+  configure()
+  for (const response of [
+    new Response(frame({ choices: [{ delta: { content: "partial" } }] }), { headers: { "content-type": "text/event-stream" } }),
+    new Response(frame({ error: { message: "secret" } }), {
+      headers: { "content-type": "text/event-stream" },
+    }),
+    new Response("data: bad json\n\n", {
+      headers: { "content-type": "text/event-stream" },
+    }),
+  ]) {
+    globalThis.fetch = async () => response
+    const stream = await streamChat(
+      input,
+      new AbortController().signal,
+      telemetry()
+    )
+    await assert.rejects(Array.fromAsync(stream))
+  }
+})
+
+test("Claude/Gemini clean EOF after finish_reason succeeds without DONE", async () => {
+  configure()
+  globalThis.fetch = async () => gatewayResponse("claude-haiku-4-5-20251001", "")
+  const event = telemetry()
+  await Array.fromAsync(await streamChat(input, new AbortController().signal, event))
+  assert.equal(event.outputTokens, 5)
+})
+
+test("route authenticates before gateway calls and rejects malformed bodies/origins", async () => {
+  console.info = () => {}
+  globalThis.fetch = async () => {
+    throw new Error("must not call gateway")
+  }
+  assert.equal((await POST(request())).status, 401)
+  user = { $id: "test-user" }
+  assert.equal(
+    (await POST(request(input, { origin: "https://other.example" }))).status,
+    403
+  )
+  assert.equal(
+    (await POST(request({ ...input, model: "made-up" }))).status,
+    400
+  )
+  assert.equal(
+    (await POST(request({ ...input, padding: "x".repeat(512_001) }))).status,
+    413
+  )
+})
+
+test("route streams normalized events and logs no prompt/key", async () => {
+  configure()
+  user = { $id: "test-user" }
+  const logs = []
+  console.info = (value) => logs.push(JSON.parse(value))
+  globalThis.fetch = async () => gatewayResponse()
+  const response = await POST(request())
+  const events = (await Array.fromAsync(readSseData(response.body))).map(
+    JSON.parse
+  )
+  assert.equal(response.status, 200)
+  assert.equal(events.at(-1).type, "done")
+  assert.equal(logs[0].status, "complete")
+  assert.equal(logs[0].actualModel, "gpt-5.6-luna")
+  assert.doesNotMatch(JSON.stringify(logs), /Hello|test-key-not-a-secret/)
+})
+
+test("client keeps the mock-compatible callbacks and fails on missing terminal event", async () => {
+  const statuses = []
+  const chunks = []
+  globalThis.fetch = async () =>
+    new Response(
+      frame({ type: "delta", text: "hello" }) + frame({ type: "done" })
+    )
+  const options = {
+    ...input,
+    signal: new AbortController().signal,
+    onStatus: (status) => statuses.push(status),
+    onChunk: (chunk) => chunks.push(chunk),
+    onMetadata: () => {},
+  }
+  await sendMessage(options)
+  assert.deepEqual(statuses, ["thinking", "streaming", "complete"])
+  assert.deepEqual(chunks, ["hello"])
+  globalThis.fetch = async () =>
+    new Response(frame({ type: "delta", text: "partial" }))
+  await assert.rejects(sendMessage(options), /interrupted/)
+})
+
+test("stopping downstream propagates abort to the upstream provider", async () => {
+  configure()
+  user = { $id: "test-user" }
+  const logs = []
+  console.info = (value) => logs.push(JSON.parse(value))
+  let upstreamSignal
+  globalThis.fetch = async (_url, options) => {
+    upstreamSignal = options.signal
+    return new Response(
+      new ReadableStream({
+        start(output) {
+          options.signal.addEventListener(
+            "abort",
+            () => output.error(new DOMException("Stopped", "AbortError")),
+            { once: true }
+          )
+        },
+      }),
+      { headers: { "content-type": "text/event-stream" } }
+    )
+  }
+  const response = await POST(request())
+  const reader = response.body.getReader()
+  await reader.read()
+  await reader.cancel()
+  await new Promise((resolve) => setTimeout(resolve, 10))
+  assert.equal(upstreamSignal.aborted, true)
+  assert.equal(logs[0].status, "aborted")
+})

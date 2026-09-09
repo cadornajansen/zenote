@@ -1,15 +1,25 @@
+import type { Metadata } from "next"
 import { Geist, Geist_Mono } from "next/font/google"
 
 import "./globals.css"
-import { ThemeProvider } from "@/components/theme-provider"
-import { cn } from "@/lib/utils";
+import { AppwriteStartupPing } from "@/components/appwrite-startup-ping"
+import { cn } from "@/lib/utils"
 
-const geist = Geist({subsets:['latin'],variable:'--font-sans'})
+const geist = Geist({ subsets: ["latin"], variable: "--font-sans" })
 
 const fontMono = Geist_Mono({
   subsets: ["latin"],
   variable: "--font-mono",
 })
+
+export const metadata: Metadata = {
+  title: {
+    default: "Zenote | Your AI for anything",
+    template: "%s | Zenote",
+  },
+  description:
+    "Chat, analyze files, work with images, and access powerful AI models from one place.",
+}
 
 export default function RootLayout({
   children,
@@ -19,11 +29,18 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      suppressHydrationWarning
-      className={cn("antialiased", fontMono.variable, "font-sans", geist.variable)}
+      className={cn(
+        "dark",
+        "antialiased",
+        fontMono.variable,
+        "font-sans",
+        geist.variable
+      )}
+      data-scroll-behavior="smooth"
     >
       <body>
-        <ThemeProvider>{children}</ThemeProvider>
+        <AppwriteStartupPing />
+        {children}
       </body>
     </html>
   )
