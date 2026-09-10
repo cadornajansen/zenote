@@ -8,9 +8,47 @@ import {
   type ChatTelemetry,
 } from "@/lib/ai"
 import type { ChatEvent } from "@/lib/chat"
-import { createMessage, DbError, getUserMessage } from "@/lib/db"
+import { createMessage, DbError, getUserMessage, listMessages } from "@/lib/db"
+import { loadAttachmentContext } from "@/lib/attachments"
+import { AttachmentError } from "@/lib/attachment-policy"
 
 export const runtime = "nodejs"
+
+function retryablePersistenceError(error: unknown) {
+  const code =
+    error instanceof DbError
+      ? error.status
+      : typeof error === "object" &&
+          error !== null &&
+          "code" in error &&
+          typeof error.code === "number"
+        ? error.code
+        : undefined
+  return (
+    code === 0 ||
+    code === 408 ||
+    code === 429 ||
+    (typeof code === "number" && code >= 500) ||
+    (error instanceof TypeError && error.message === "fetch failed")
+  )
+}
+
+async function saveAssistantResponse(
+  conversationId: string,
+  input: Parameters<typeof createMessage>[1]
+) {
+  let lastError: unknown
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      return await createMessage(conversationId, input)
+    } catch (error) {
+      lastError = error
+      if (!retryablePersistenceError(error) || attempt === 2) throw error
+      await new Promise((resolve) => setTimeout(resolve, 150 * 2 ** attempt))
+    }
+  }
+  throw lastError
+}
 
 export async function POST(request: Request) {
   const started = Date.now()
@@ -77,12 +115,49 @@ export async function POST(request: Request) {
       const last = input.messages.at(-1)
       if (last?.role !== "user" || last.content !== prompt.content)
         throw new ChatError("The saved message does not match this request.")
+      if (
+        input.messages.slice(0, -1).some((message) => message.id === messageId)
+      )
+        throw new ChatError("Duplicate message reference.")
+      last.id = messageId
+      const references = input.messages.filter(
+        (message) => message.id && message.id !== messageId
+      )
+      if (references.length) {
+        const history = await listMessages(conversationId)
+        for (const reference of references) {
+          if (
+            !history.some(
+              (message) =>
+                message.$id === reference.id &&
+                message.content === reference.content &&
+                message.role === reference.role
+            )
+          )
+            throw new ChatError(
+              "The saved history does not match this request."
+            )
+        }
+      }
     } catch (error) {
       if (error instanceof ChatError) throw error
-      throw new ChatError(error instanceof DbError ? error.message : "The saved message could not be loaded.", error instanceof DbError ? error.status : 503)
+      throw new ChatError(
+        error instanceof DbError
+          ? error.message
+          : "The saved message could not be loaded.",
+        error instanceof DbError ? error.status : 503
+      )
     }
     telemetry.requestedModel = input.model
-    const events = await streamChat(input, signal, telemetry)
+    const attachments = await loadAttachmentContext(
+      conversationId,
+      input.messages
+        .filter((message) => message.role === "user" && message.id)
+        .map((message) => message.id!),
+      messageId,
+      signal
+    )
+    const events = await streamChat(input, signal, telemetry, attachments)
     const encoder = new TextEncoder()
     let cancelled = false
     const stream = new ReadableStream<Uint8Array>({
@@ -100,9 +175,20 @@ export async function POST(request: Request) {
           }
           signal.throwIfAborted()
           try {
-            await createMessage(conversationId, { modelId: input.model, role: "assistant", content, parentMessageId: messageId }, signal)
+            await saveAssistantResponse(
+              conversationId,
+              {
+                modelId: input.model,
+                role: "assistant",
+                content,
+                parentMessageId: messageId,
+              }
+            )
           } catch {
-            throw new ChatError("The response could not be saved. Your message is still in this chat.", 503)
+            throw new ChatError(
+              "The response could not be saved. Your message is still in this chat.",
+              503
+            )
           }
           telemetry.status = "complete"
           emit({ type: "done" })
@@ -133,9 +219,13 @@ export async function POST(request: Request) {
     controller.abort()
     if (request.signal.aborted) telemetry.status = "aborted"
     log()
-    const safe = safeChatError(error)
+    const safe = error instanceof AttachmentError ? error : safeChatError(error)
     return Response.json(
-      { error: safe.message, requestId: telemetry.requestId },
+      {
+        error: safe.message,
+        ...(error instanceof AttachmentError ? { code: error.code } : {}),
+        requestId: telemetry.requestId,
+      },
       {
         status: request.signal.aborted ? 499 : safe.status,
         headers: {

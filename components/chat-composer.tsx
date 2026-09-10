@@ -38,6 +38,11 @@ import {
 } from "@/components/ui/tooltip"
 import type { MockAttachment } from "@/lib/mock-chat"
 import { cn } from "@/lib/utils"
+import {
+  ATTACHMENT_ACCEPT,
+  ATTACHMENT_LIMITS,
+  validateAttachmentFile,
+} from "@/lib/attachment-policy"
 
 type ChatComposerProps = {
   value: string
@@ -73,6 +78,7 @@ export function ChatComposer({
   const inputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const [dragging, setDragging] = useState(false)
+  const [fileError, setFileError] = useState<string>()
   const active = status !== "idle"
 
   useLayoutEffect(() => {
@@ -82,21 +88,29 @@ export function ChatComposer({
   }, [value])
 
   function addFiles(files: FileList | File[]) {
-    const next = Array.from(files).map((file, index): MockAttachment => ({
-      id: `local-${file.name}-${file.lastModified}-${index}`,
-      name: file.name,
-      type: file.type.startsWith("image/")
-        ? "image"
-        : file.type.startsWith("audio/")
-          ? "audio"
-          : "document",
-      size:
-        file.size > 1_000_000
-          ? `${(file.size / 1_000_000).toFixed(1)} MB`
-          : `${Math.max(1, Math.round(file.size / 1000))} KB`,
-      status: "ready",
-    }))
-    onAttachmentsChange([...attachments, ...next])
+    if (active) return
+    setFileError(undefined)
+    try {
+      if (attachments.length + files.length > ATTACHMENT_LIMITS.count)
+        throw new Error("Attach up to four files per message.")
+      const next = Array.from(files).map((file): MockAttachment => ({
+        id: `local-${crypto.randomUUID()}`,
+        name: file.name,
+        type: validateAttachmentFile(file.name, file.size).kind,
+        file,
+        size:
+          file.size > 1_000_000
+            ? `${(file.size / 1_000_000).toFixed(1)} MB`
+            : `${Math.max(1, Math.round(file.size / 1000))} KB`,
+        status: "attached",
+      }))
+      onAttachmentsChange([...attachments, ...next])
+    } catch (error) {
+      setFileError(
+        error instanceof Error ? error.message : "This file cannot be attached."
+      )
+    }
+    if (inputRef.current) inputRef.current.value = ""
   }
 
   function removeAttachment(id: string) {
@@ -114,7 +128,7 @@ export function ChatComposer({
       )}
       onDragEnter={(event) => {
         event.preventDefault()
-        setDragging(true)
+        if (!active) setDragging(true)
       }}
       onDragOver={(event) => event.preventDefault()}
       onDragLeave={(event) => {
@@ -165,6 +179,7 @@ export function ChatComposer({
                 </AttachmentContent>
                 <AttachmentActions>
                   <AttachmentAction
+                    disabled={active}
                     aria-label={`Remove ${attachment.name}`}
                     onClick={() => removeAttachment(attachment.id)}
                   >
@@ -177,10 +192,14 @@ export function ChatComposer({
         </AttachmentGroup>
       )}
 
+      {fileError && (
+        <p role="alert" className="px-2 pb-1 text-xs text-destructive">
+          {fileError}
+        </p>
+      )}
       {attachments.length > 0 && (
         <p role="status" className="px-2 pb-1 text-xs text-muted-foreground">
-          Files are local previews only. Remove attachments to send a text
-          message.
+          Up to 4 files. Documents/audio: 5 MB; images: 3.5 MB; text: 1 MB.
         </p>
       )}
 
@@ -208,6 +227,9 @@ export function ChatComposer({
           ref={inputRef}
           type="file"
           multiple
+          accept={ATTACHMENT_ACCEPT}
+          disabled={active}
+          aria-label="Choose attachments"
           className="sr-only"
           onChange={(event) =>
             event.target.files && addFiles(event.target.files)
@@ -223,6 +245,7 @@ export function ChatComposer({
                       variant="ghost"
                       size="icon"
                       aria-label="Add attachment"
+                      disabled={active}
                     />
                   }
                 />

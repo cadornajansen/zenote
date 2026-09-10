@@ -4,13 +4,7 @@ export type MockConversation = {
   updatedAt: string
 }
 
-export type MockAttachment = {
-  id: string
-  name: string
-  type: "image" | "document" | "audio"
-  size: string
-  status: "attached" | "processing" | "ready" | "error"
-}
+export type MockAttachment = import("./attachment-policy").AttachmentSummary
 
 export type MockMessageBlock =
   | { type: "paragraph"; text: string }

@@ -7,6 +7,9 @@ import {
   CopyIcon,
   ExternalLinkIcon,
   FileTextIcon,
+  ImageIcon,
+  MicIcon,
+  XIcon,
   MoreHorizontalIcon,
   RefreshCcwIcon,
   ThumbsDownIcon,
@@ -15,6 +18,8 @@ import {
 
 import {
   Attachment,
+  AttachmentAction,
+  AttachmentActions,
   AttachmentContent,
   AttachmentDescription,
   AttachmentMedia,
@@ -36,8 +41,19 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import type { MockMessage, MockMessageBlock } from "@/lib/mock-chat"
+import type { AttachmentSummary } from "@/lib/attachment-policy"
 
-export const ChatMessage = memo(function ChatMessage({ message }: { message: MockMessage }) {
+export const ChatMessage = memo(function ChatMessage({
+  message,
+  onRetry,
+  onRemoveAttachment,
+  attachmentActionsDisabled,
+}: {
+  message: MockMessage
+  onRetry?: () => void
+  onRemoveAttachment?: (attachment: AttachmentSummary) => void
+  attachmentActionsDisabled?: boolean
+}) {
   const [copied, setCopied] = useState(false)
   const [copyError, setCopyError] = useState(false)
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined)
@@ -46,7 +62,9 @@ export const ChatMessage = memo(function ChatMessage({ message }: { message: Moc
 
   async function copyMessage() {
     try {
-      await navigator.clipboard.writeText(message.blocks?.map(blockMarkdown).join("\n\n") ?? message.content)
+      await navigator.clipboard.writeText(
+        message.blocks?.map(blockMarkdown).join("\n\n") ?? message.content
+      )
       setCopied(true)
       setCopyError(false)
       clearTimeout(timer.current)
@@ -64,17 +82,61 @@ export const ChatMessage = memo(function ChatMessage({ message }: { message: Moc
             <Attachment
               key={attachment.id}
               size="sm"
-              state={attachment.status === "error" ? "error" : "done"}
+              state={
+                attachment.status === "ready"
+                  ? "done"
+                  : attachment.status === "attached"
+                    ? "idle"
+                    : attachment.status
+              }
             >
               <AttachmentMedia>
-                <FileTextIcon />
+                {attachment.status === "uploading" ||
+                attachment.status === "processing" ? (
+                  <Spinner />
+                ) : attachment.type === "image" ? (
+                  <ImageIcon />
+                ) : attachment.type === "audio" ? (
+                  <MicIcon />
+                ) : (
+                  <FileTextIcon />
+                )}
               </AttachmentMedia>
               <AttachmentContent>
                 <AttachmentTitle>{attachment.name}</AttachmentTitle>
-                <AttachmentDescription>{attachment.size}</AttachmentDescription>
+                <AttachmentDescription>
+                  {attachment.status === "error"
+                    ? (attachment.error ?? "Could not process")
+                    : attachment.status === "uploading"
+                      ? "Uploading..."
+                      : attachment.status === "processing"
+                        ? "Processing..."
+                        : attachment.size}
+                </AttachmentDescription>
               </AttachmentContent>
+              {onRemoveAttachment && (
+                <AttachmentActions>
+                  <AttachmentAction
+                    aria-label={`Remove ${attachment.name}`}
+                    disabled={attachmentActionsDisabled}
+                    onClick={() => onRemoveAttachment(attachment)}
+                  >
+                    <XIcon />
+                  </AttachmentAction>
+                </AttachmentActions>
+              )}
             </Attachment>
           ))}
+          {onRetry && (
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={attachmentActionsDisabled}
+              onClick={onRetry}
+            >
+              <RefreshCcwIcon /> Retry response
+            </Button>
+          )}
           <Bubble
             variant="secondary"
             align="end"
@@ -85,7 +147,11 @@ export const ChatMessage = memo(function ChatMessage({ message }: { message: Moc
             </BubbleContent>
           </Bubble>
           <MessageActions onCopy={copyMessage} copied={copied} user />
-          {copyError && <p role="status" className="text-xs text-muted-foreground">Copy failed. Please try again.</p>}
+          {copyError && (
+            <p role="status" className="text-xs text-muted-foreground">
+              Copy failed. Please try again.
+            </p>
+          )}
         </MessageContent>
       </Message>
     )
@@ -116,13 +182,16 @@ export const ChatMessage = memo(function ChatMessage({ message }: { message: Moc
                 </CollapsibleContent>
               </Collapsible>
             )}
-            <div className="chat-prose w-full min-w-0 max-w-full text-[15px] leading-7 text-foreground/95">
+            <div className="chat-prose w-full max-w-full min-w-0 text-[15px] leading-7 text-foreground/95">
               {message.blocks ? (
                 message.blocks.map((block, index) => (
                   <MessageBlock key={`${block.type}-${index}`} block={block} />
                 ))
               ) : (
-                <AiResponse content={message.content} streaming={message.status === "streaming"} />
+                <AiResponse
+                  content={message.content}
+                  streaming={message.status === "streaming"}
+                />
               )}
               {message.status === "streaming" && (
                 <span
@@ -145,7 +214,11 @@ export const ChatMessage = memo(function ChatMessage({ message }: { message: Moc
             {message.status !== "streaming" && (
               <MessageActions onCopy={copyMessage} copied={copied} />
             )}
-            {copyError && <p role="status" className="text-xs text-muted-foreground">Copy failed. Please try again.</p>}
+            {copyError && (
+              <p role="status" className="text-xs text-muted-foreground">
+                Copy failed. Please try again.
+              </p>
+            )}
           </>
         )}
       </MessageContent>
@@ -155,19 +228,39 @@ export const ChatMessage = memo(function ChatMessage({ message }: { message: Moc
 
 function blockMarkdown(block: MockMessageBlock): string {
   switch (block.type) {
-    case "paragraph": return block.text
-    case "heading": return `## ${block.text}`
-    case "list": return block.items.map((item) => `- ${item}`).join("\n")
+    case "paragraph":
+      return block.text
+    case "heading":
+      return `## ${block.text}`
+    case "list":
+      return block.items.map((item) => `- ${item}`).join("\n")
     case "code": {
-      const fence = "`".repeat(Math.max(3, ...Array.from(block.code.matchAll(/`+/g), (match) => match[0].length + 1)))
+      const fence = "`".repeat(
+        Math.max(
+          3,
+          ...Array.from(
+            block.code.matchAll(/`+/g),
+            (match) => match[0].length + 1
+          )
+        )
+      )
       return `${fence}${block.language}\n${block.code}\n${fence}`
     }
     case "table": {
-      const row = (cells: string[]) => `| ${cells.map((cell) => cell.replace(/\|/g, "\\|")).join(" | ")} |`
-      return [row(block.headers), row(block.headers.map(() => "---")), ...block.rows.map(row)].join("\n")
+      const row = (cells: string[]) =>
+        `| ${cells.map((cell) => cell.replace(/\|/g, "\\|")).join(" | ")} |`
+      return [
+        row(block.headers),
+        row(block.headers.map(() => "---")),
+        ...block.rows.map(row),
+      ].join("\n")
     }
-    case "image": return `${block.label}. ${block.description}`
-    case "sources": return block.items.map((source) => `[${source.label}](${source.href})`).join("\n")
+    case "image":
+      return `${block.label}. ${block.description}`
+    case "sources":
+      return block.items
+        .map((source) => `[${source.label}](${source.href})`)
+        .join("\n")
   }
 }
 

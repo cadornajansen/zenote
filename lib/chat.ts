@@ -1,10 +1,20 @@
-export type ChatInputMessage = { role: "user" | "assistant"; content: string }
+export type ChatInputMessage = {
+  role: "user" | "assistant"
+  content: string
+  id?: string
+}
 
 export const quickActions = [
   { label: "Create", prompt: "Create a concise outline for " },
-  { label: "Analyze image", prompt: "Analyze this image and highlight the important details." },
+  {
+    label: "Analyze image",
+    prompt: "Analyze this image and highlight the important details.",
+  },
   { label: "Help me code", prompt: "Help me debug this code: " },
-  { label: "Explain", prompt: "Explain this clearly with a practical example: " },
+  {
+    label: "Explain",
+    prompt: "Explain this clearly with a practical example: ",
+  },
 ]
 
 export type ChatRequest = { model: string; messages: ChatInputMessage[] }

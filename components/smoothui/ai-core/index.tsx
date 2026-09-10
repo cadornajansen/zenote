@@ -1,11 +1,11 @@
-"use client";
+"use client"
 
 import {
   type MotionValue,
   useAnimationFrame,
   useMotionValue,
-} from "motion/react";
-import { useCallback, useEffect, useRef, useState } from "react";
+} from "motion/react"
+import { useCallback, useEffect, useRef, useState } from "react"
 
 /**
  * The single state contract shared by every SmoothUI AI component.
@@ -14,12 +14,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
  * whole surface move as one organism instead of a set of independent widgets.
  */
 export type AIState =
-  | "idle"
-  | "listening"
-  | "thinking"
-  | "streaming"
-  | "done"
-  | "error";
+  "idle" | "listening" | "thinking" | "streaming" | "done" | "error"
 
 /**
  * A behavioural hint each component expresses **in its own material**.
@@ -31,46 +26,41 @@ export type AIState =
  * a character changes expression. Same vocabulary, different flesh.
  */
 export type AIStateMotif =
-  | "breathe"
-  | "receive"
-  | "scan"
-  | "pulse"
-  | "ping"
-  | "fault";
+  "breathe" | "receive" | "scan" | "pulse" | "ping" | "fault"
 
 /** Semantic accent applied on top of the component's own palette. */
-export type AIStateAccent = "success" | "danger" | null;
+export type AIStateAccent = "success" | "danger" | null
 
 /** Motion parameters a component reads to render a given {@link AIState}. */
 export type AIStateMotion = {
   /** Semantic colour override, so status is carried by hue and not only motion. */
-  accent: AIStateAccent;
+  accent: AIStateAccent
   /** Outer bloom strength, 0–1. */
-  glow: number;
+  glow: number
   /** Palette hue rotation in degrees. Small shifts read as a mood change. */
-  hueRotate: number;
+  hueRotate: number
   /** Overall motion energy, 0–1. Scales ambient loops and displacement. */
-  intensity: number;
+  intensity: number
   /** Behavioural hint; each component expresses it in its own material. */
-  motif: AIStateMotif;
+  motif: AIStateMotif
   /** Seconds between discrete pulses, for rhythmic behaviour. */
-  pulseSeconds: number;
+  pulseSeconds: number
   /**
    * How far a shader's domain warp pushes the field, 0–1. Low values read as a
    * calm surface; high values churn without the silhouette growing.
    */
-  turbulence: number;
+  turbulence: number
   /** Revolutions per second of the noise field — the slow tumble. */
-  tumble: number;
+  tumble: number
   /** How much external amplitude reaches the surface, 0 = ignore it. */
-  reactivity: number;
+  reactivity: number
   /** Chroma multiplier. Below 1 desaturates. */
-  saturation: number;
+  saturation: number
   /** Resting scale of the surface, 1 = no change. */
-  scale: number;
+  scale: number
   /** Ambient loop speed multiplier, 1 = the component's base tempo. */
-  speed: number;
-};
+  speed: number
+}
 
 /**
  * Per-state presets.
@@ -174,13 +164,13 @@ export const AI_STATE_MOTION: Record<AIState, AIStateMotion> = {
     tumble: 0.14,
     turbulence: 0.95,
   },
-};
+}
 
 /** Semantic accents. Deliberately not tokens — orbs render outside a theme. */
 export const AI_ACCENT_COLORS: Record<"success" | "danger", string> = {
   danger: "oklch(63% 0.21 25)",
   success: "oklch(72% 0.17 150)",
-};
+}
 
 /**
  * Colour used by a state's overlay motif: the semantic accent when the state
@@ -190,13 +180,13 @@ export const getAIStateAccentColor = (
   state: AIState | undefined,
   fallback: string
 ): string => {
-  const accent = AI_STATE_MOTION[state ?? "idle"]?.accent;
-  return accent ? AI_ACCENT_COLORS[accent] : fallback;
-};
+  const accent = AI_STATE_MOTION[state ?? "idle"]?.accent
+  return accent ? AI_ACCENT_COLORS[accent] : fallback
+}
 
 /** Motion preset for a state, falling back to `idle` for unknown values. */
 export const getAIStateMotion = (state: AIState | undefined): AIStateMotion =>
-  AI_STATE_MOTION[state ?? "idle"] ?? AI_STATE_MOTION.idle;
+  AI_STATE_MOTION[state ?? "idle"] ?? AI_STATE_MOTION.idle
 
 /**
  * Amplitude accepted by every reactive AI component.
@@ -204,10 +194,10 @@ export const getAIStateMotion = (state: AIState | undefined): AIStateMotion =>
  * A `MotionValue` is the preferred form: it updates outside React, so a 60fps
  * audio signal never triggers a re-render.
  */
-export type AIAmplitude = number | MotionValue<number> | undefined;
+export type AIAmplitude = number | MotionValue<number> | undefined
 
 const isMotionValue = (value: AIAmplitude): value is MotionValue<number> =>
-  typeof value === "object" && value !== null && "get" in value;
+  typeof value === "object" && value !== null && "get" in value
 
 /**
  * Normalises the `amplitude` prop into a stable `MotionValue<number>` so
@@ -216,51 +206,47 @@ const isMotionValue = (value: AIAmplitude): value is MotionValue<number> =>
 export const useAmplitudeValue = (
   amplitude: AIAmplitude
 ): MotionValue<number> => {
-  const fallback = useMotionValue(0);
-  const numeric = typeof amplitude === "number" ? amplitude : null;
+  const fallback = useMotionValue(0)
+  const numeric = typeof amplitude === "number" ? amplitude : null
 
   useEffect(() => {
     if (numeric !== null) {
-      fallback.set(numeric);
+      fallback.set(numeric)
     }
-  }, [numeric, fallback]);
+  }, [numeric, fallback])
 
-  return isMotionValue(amplitude) ? amplitude : fallback;
-};
+  return isMotionValue(amplitude) ? amplitude : fallback
+}
 
 export type AudioAmplitudeStatus =
-  | "idle"
-  | "requesting"
-  | "active"
-  | "denied"
-  | "unsupported";
+  "idle" | "requesting" | "active" | "denied" | "unsupported"
 
 export type UseAudioAmplitudeOptions = {
   /** Request microphone access as soon as the hook mounts. */
-  autoStart?: boolean;
+  autoStart?: boolean
   /**
    * Envelope smoothing, 0–1. Higher is smoother and lazier; the default keeps
    * attack snappy so an orb reacts on the first syllable.
    */
-  smoothing?: number;
+  smoothing?: number
   /** FFT size handed to the analyser node. Must be a power of two. */
-  fftSize?: number;
-};
+  fftSize?: number
+}
 
 export type UseAudioAmplitudeResult = {
   /** Smoothed RMS level, 0–1, as a `MotionValue`. */
-  amplitude: MotionValue<number>;
-  status: AudioAmplitudeStatus;
-  start: () => Promise<void>;
-  stop: () => void;
-};
+  amplitude: MotionValue<number>
+  status: AudioAmplitudeStatus
+  start: () => Promise<void>
+  stop: () => void
+}
 
-const DEFAULT_SMOOTHING = 0.55;
-const DEFAULT_FFT_SIZE = 512;
+const DEFAULT_SMOOTHING = 0.55
+const DEFAULT_FFT_SIZE = 512
 /** Raw RMS rarely exceeds ~0.3 for speech, so normalise into a usable 0–1. */
-const RMS_TO_UNIT = 3.2;
+const RMS_TO_UNIT = 3.2
 /** Attack is faster than release so peaks land immediately and decay gently. */
-const ATTACK_FACTOR = 0.35;
+const ATTACK_FACTOR = 0.35
 
 /**
  * Reads microphone loudness as a 0–1 `MotionValue`.
@@ -276,32 +262,32 @@ export const useAudioAmplitude = (
     autoStart = false,
     smoothing = DEFAULT_SMOOTHING,
     fftSize = DEFAULT_FFT_SIZE,
-  } = options;
+  } = options
 
-  const amplitude = useMotionValue(0);
-  const [status, setStatus] = useState<AudioAmplitudeStatus>("idle");
+  const amplitude = useMotionValue(0)
+  const [status, setStatus] = useState<AudioAmplitudeStatus>("idle")
 
-  const contextRef = useRef<AudioContext | null>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-  const analyserRef = useRef<AnalyserNode | null>(null);
-  const bufferRef = useRef<Float32Array<ArrayBuffer> | null>(null);
+  const contextRef = useRef<AudioContext | null>(null)
+  const streamRef = useRef<MediaStream | null>(null)
+  const analyserRef = useRef<AnalyserNode | null>(null)
+  const bufferRef = useRef<Float32Array<ArrayBuffer> | null>(null)
 
   const stop = useCallback(() => {
     for (const track of streamRef.current?.getTracks() ?? []) {
-      track.stop();
+      track.stop()
     }
-    streamRef.current = null;
-    analyserRef.current = null;
-    bufferRef.current = null;
-    contextRef.current?.close();
-    contextRef.current = null;
-    amplitude.set(0);
-    setStatus("idle");
-  }, [amplitude]);
+    streamRef.current = null
+    analyserRef.current = null
+    bufferRef.current = null
+    contextRef.current?.close()
+    contextRef.current = null
+    amplitude.set(0)
+    setStatus("idle")
+  }, [amplitude])
 
   const start = useCallback(async () => {
     if (analyserRef.current) {
-      return;
+      return
     }
 
     const AudioContextCtor =
@@ -309,62 +295,72 @@ export const useAudioAmplitude = (
         ? undefined
         : (window.AudioContext ??
           (window as unknown as { webkitAudioContext?: typeof AudioContext })
-            .webkitAudioContext);
+            .webkitAudioContext)
 
     if (!(AudioContextCtor && navigator.mediaDevices?.getUserMedia)) {
-      setStatus("unsupported");
-      return;
+      setStatus("unsupported")
+      return
     }
 
-    setStatus("requesting");
+    setStatus("requesting")
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const context = new AudioContextCtor();
-      const analyser = context.createAnalyser();
-      analyser.fftSize = fftSize;
-      context.createMediaStreamSource(stream).connect(analyser);
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const context = new AudioContextCtor()
+      const analyser = context.createAnalyser()
+      analyser.fftSize = fftSize
+      context.createMediaStreamSource(stream).connect(analyser)
 
-      streamRef.current = stream;
-      contextRef.current = context;
-      analyserRef.current = analyser;
-      bufferRef.current = new Float32Array(analyser.fftSize);
-      setStatus("active");
+      streamRef.current = stream
+      contextRef.current = context
+      analyserRef.current = analyser
+      bufferRef.current = new Float32Array(analyser.fftSize)
+      setStatus("active")
     } catch {
-      setStatus("denied");
+      setStatus("denied")
     }
-  }, [fftSize]);
+  }, [fftSize])
 
   useEffect(() => {
+    let active = true
+
     if (autoStart) {
-      start();
+      queueMicrotask(() => {
+        if (active) {
+          void start()
+        }
+      })
     }
-    return stop;
-  }, [autoStart, start, stop]);
+
+    return () => {
+      active = false
+      stop()
+    }
+  }, [autoStart, start, stop])
 
   useAnimationFrame(() => {
-    const analyser = analyserRef.current;
-    const buffer = bufferRef.current;
+    const analyser = analyserRef.current
+    const buffer = bufferRef.current
     if (!(analyser && buffer)) {
-      return;
+      return
     }
 
-    analyser.getFloatTimeDomainData(buffer);
+    analyser.getFloatTimeDomainData(buffer)
 
-    let sumOfSquares = 0;
+    let sumOfSquares = 0
     for (const sample of buffer) {
-      sumOfSquares += sample * sample;
+      sumOfSquares += sample * sample
     }
-    const rms = Math.sqrt(sumOfSquares / buffer.length);
-    const target = Math.min(1, rms * RMS_TO_UNIT);
+    const rms = Math.sqrt(sumOfSquares / buffer.length)
+    const target = Math.min(1, rms * RMS_TO_UNIT)
 
-    const previous = amplitude.get();
-    const factor = target > previous ? smoothing * ATTACK_FACTOR : smoothing;
-    amplitude.set(previous + (target - previous) * (1 - factor));
-  });
+    const previous = amplitude.get()
+    const factor = target > previous ? smoothing * ATTACK_FACTOR : smoothing
+    amplitude.set(previous + (target - previous) * (1 - factor))
+  })
 
-  return { amplitude, start, status, stop };
-};
+  return { amplitude, start, status, stop }
+}
 
 /**
  * Amplitude generator for demos, docs and previews — no microphone involved.
@@ -376,20 +372,20 @@ export const useAudioAmplitude = (
 export const useSimulatedAmplitude = (
   state: AIState = "idle"
 ): MotionValue<number> => {
-  const amplitude = useMotionValue(0);
-  const motion = getAIStateMotion(state);
+  const amplitude = useMotionValue(0)
+  const motion = getAIStateMotion(state)
 
   useAnimationFrame((time) => {
-    const t = time / 1000;
+    const t = time / 1000
     // Three detuned sines read as organic; a single sine reads as a metronome.
     const envelope =
       0.5 +
       0.3 * Math.sin(t * 2.1 * motion.speed) +
       0.14 * Math.sin(t * 5.3 * motion.speed + 1.7) +
-      0.06 * Math.sin(t * 11.7 * motion.speed + 0.4);
+      0.06 * Math.sin(t * 11.7 * motion.speed + 0.4)
 
-    amplitude.set(Math.min(1, Math.max(0, envelope * motion.intensity)));
-  });
+    amplitude.set(Math.min(1, Math.max(0, envelope * motion.intensity)))
+  })
 
-  return amplitude;
-};
+  return amplitude
+}
