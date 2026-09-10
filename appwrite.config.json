@@ -1,0 +1,24 @@
+{
+  "projectId": "6a9e3f7c0019355433ad",
+  "endpoint": "https://sgp.cloud.appwrite.io/v1",
+  "functions": [
+    {
+      "$id": "attachment-processor",
+      "name": "Zenote Attachment Processor",
+      "runtime": "node-22",
+      "path": "functions/attachment-processor",
+      "entrypoint": "dist/main.js",
+      "commands": "npm ci --include=dev && npm run build && npm prune --omit=dev",
+      "execute": [],
+      "events": [],
+      "schedule": "",
+      "timeout": 300,
+      "enabled": true,
+      "logging": true,
+      "scopes": ["rows.read", "rows.write", "files.read"],
+      "buildSpecification": "s-2vcpu-2gb",
+      "runtimeSpecification": "s-0.5vcpu-512mb",
+      "ignore": ["node_modules", "dist", "tests", ".env", ".env.*", ".git"]
+    }
+  ]
+}

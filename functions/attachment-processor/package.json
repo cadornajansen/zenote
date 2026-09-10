@@ -1,0 +1,26 @@
+{
+  "name": "zenote-attachment-processor",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test tests/*.test.js"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "node-appwrite": "^29.0.0",
+    "mammoth": "^1.12.2",
+    "pdf-parse": "^2.4.5",
+    "fflate": "^0.8.3",
+    "sharp": "^0.35.4",
+    "@aws-sdk/client-bedrock-runtime": "^3.1128.0",
+    "@aws-sdk/client-textract": "^3.1128.0"
+  }
+}

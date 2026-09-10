@@ -1,7 +1,7 @@
 import "server-only"
 
 import { cookies } from "next/headers"
-import { Account, Client, TablesDB } from "node-appwrite"
+import { Account, Client, Functions, Storage, TablesDB } from "node-appwrite"
 
 const endpoint =
   process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT ??
@@ -24,7 +24,12 @@ export function createAdminServerClient() {
     .setProject(projectId)
     .setKey(apiKey)
 
-  return { account: new Account(client), tablesDB: new TablesDB(client) }
+  return {
+    account: new Account(client),
+    tablesDB: new TablesDB(client),
+    storage: new Storage(client),
+    functions: new Functions(client),
+  }
 }
 
 export async function createSessionClient() {
@@ -37,5 +42,9 @@ export async function createSessionClient() {
     .setProject(projectId)
     .setSession(session)
 
-  return { account: new Account(client), tablesDB: new TablesDB(client) }
+  return {
+    account: new Account(client),
+    tablesDB: new TablesDB(client),
+    storage: new Storage(client),
+  }
 }

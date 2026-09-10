@@ -18,9 +18,9 @@ Appwrite is Zenote's primary backend platform:
 
 - **Appwrite Sites:** production hosting.
 - **Appwrite Auth:** authentication and identity/password management.
-- **Appwrite TablesDB:** structured application data when database implementation is requested.
-- **Appwrite Storage:** user attachments and files when storage implementation is requested.
-- **Appwrite Functions:** only for a real isolated backend or background use case.
+- **Appwrite TablesDB:** implemented profiles, conversations/messages, preferences, model mirror and attachments.
+- **Appwrite Storage:** implemented private owner-readable attachment files; server-only writes.
+- **Appwrite Functions:** one asynchronous TypeScript/Node 22 `attachment-processor`, locally compiled to `dist/main.js` and isolated from the Site.
 
 Do not introduce Vercel as Zenote's production hosting platform, another primary database, Supabase, or Postgres without explicit direction.
 
@@ -78,7 +78,7 @@ Visible models are GPT-5 Nano, GPT-5 Mini, GPT-5.6 Luna, GPT-5.6 Terra, GPT-5.6 
 
 ## 7. Multimodal routing
 
-Zenote currently supports text. Images, documents, and audio remain planned; their normalized attachment and AWS processor contracts are scaffolded only. The future capability router must use native multimodal input only when the selected model supports it.
+Zenote supports text plus preprocessed images, documents and audio. Current visible models still declare native image/file/audio support false: attachments are normalized into bounded text before the existing gateway call. Native multimodal chat requests remain deferred and must never bypass capability checks.
 
 ```text
 Incoming request
@@ -98,7 +98,11 @@ For documents, use local or server-side deterministic text extraction for PDF, D
 
 For audio, use AssemblyAI speech-to-text, then pass the transcript through the Zenote AI layer.
 
-Processed attachment context should eventually be cached with the original file reference, `extractedText`, `extractedContext`, `processingProvider`, `processingModel`, `processingVersion`, and `processedAt`. Do not reprocess an uploaded attachment on every follow-up message. This pipeline is planned only.
+Phase 3 caches `processedText`, `processor`, status and a safe error code alongside the private file reference in `attachments`. Appwrite timestamps and a small content-hash/lease metadata field avoid duplicate schema fields. Follow-ups reuse ready text. Four files are allowed per message: TXT/MD up to 1 MB, PNG/JPEG/WebP up to 3.5 MB and 8,000 pixels per edge, DOCX/PDF/audio up to 5 MB. Audio formats are MP3/WAV/FLAC/OGG. Filenames, sizes and content signatures are server-validated; SVG, video, arbitrary URLs and unsupported archives are rejected.
+
+Mammoth, pdf-parse, fflate (DOCX ZIP preflight), sharp (image validation), and both AWS SDK clients belong exclusively to the independently installed `functions/attachment-processor` package. PDF sampling is at most 50 pages (first 45 and last five for longer files); DOCX expansion is at most 20 MB/500 entries. Parsing runs directly in the Appwrite Function, not a Next subprocess; the Site has no parser tracing or external-package configuration. Images use Textract `AnalyzeDocument` with layout/table/form features, then sequential primary and verification Nova vision calls with 8,192 output tokens each. `BEDROCK_NOVA_VISION_MODEL_ID` selects an invocable multimodal inference profile and falls back to the legacy `BEDROCK_NOVA_MODEL_ID`; the active `global.amazon.nova-2-lite-v1:0` profile is the code default because Nova Premier is legacy and near EOL. OCR, structured data, and verified visual evidence are deterministically assembled within 24k characters with graceful stage degradation. The unchanged synchronous `DetectDocumentText` path is used only for empty single-page PDFs; unsupported scans fail rather than create asynchronous OCR jobs. AssemblyAI STT uses native fetch and the existing key; its transcript is deleted best-effort after processing. Provider retention still applies to ambiguous submissions/cleanup failures.
+
+Cached text and total injected attachment context are separately bounded to 24,000 characters. Attachment-derived text is untrusted reference data, not instructions, including model-generated image descriptions. No embedding, retrieval, RAG, vector database, tools, autonomous agent, billing ledger or usage table is added.
 
 ## 9. Provider fallback strategy
 
@@ -124,7 +128,7 @@ Use Resend for transactional email when needed, including welcome emails, subscr
 
 ## 14. Environment configuration
 
-The tracked [.env.example](../.env.example) is the complete variable template. Section comments group app, Appwrite, AI provider, payment, analytics, monitoring, email, and internal server verification configuration. Only deliberately browser-safe values use the `NEXT_PUBLIC_` prefix.
+The tracked [.env.example](../.env.example) is the complete variable template. [attachment-processing.md](attachment-processing.md) assigns variables to the Site, Function or shared project. Function runtime authentication uses the injected endpoint/project and dynamic key, never a copied Site key. Only deliberately browser-safe values use the `NEXT_PUBLIC_` prefix.
 
 ## 15. Security boundaries
 
@@ -132,4 +136,4 @@ Server-only secrets include Appwrite API keys, AI provider keys, AWS credentials
 
 ## 16. Current vs planned
 
-Appwrite authentication and real AssemblyAI-backed streaming chat are implemented. The server gateway client uses native fetch with `ASSEMBLYAI_API_KEY` and `ASSEMBLYAI_LLM_BASE_URL` (HTTPS root including `/v1`). Appwrite conversation persistence is not implemented. Attachments/AWS/tool orchestration are scaffolded only, with no AWS SDK or active tool loop. PayMongo, PostHog, Sentry, Resend, storage, durable usage accounting, and other AI providers remain unimplemented.
+Appwrite authentication, persisted conversations, private attachment storage, cached multimodal preprocessing and AssemblyAI-backed streaming chat are implemented. The server gateway client uses native fetch with `ASSEMBLYAI_API_KEY` and `ASSEMBLYAI_LLM_BASE_URL` (HTTPS root including `/v1`). AWS Nova/Textract are internal preprocessing paths, not extra picker models. There is no active tool loop. PayMongo, PostHog, Sentry, Resend, durable usage accounting, rate/quota enforcement and additional chat gateways remain unimplemented and must be addressed before unrestricted paid-product rollout.
