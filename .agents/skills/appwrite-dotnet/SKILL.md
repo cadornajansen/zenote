@@ -402,4 +402,3 @@ var file = await storage.CreateFile("[BUCKET_ID]", ID.Unique(),
 > - **Forgetting permissions** — the resource becomes inaccessible to all users (including the creator)
 > - **`Role.Any()` with `write`/`update`/`delete`** — allows any user, including unauthenticated guests, to modify or remove the resource
 > - **`Permission.Read(Role.Any())` on sensitive data** — makes the resource publicly readable
-

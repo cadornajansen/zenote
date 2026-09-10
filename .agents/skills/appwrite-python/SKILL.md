@@ -406,4 +406,3 @@ file = storage.create_file('[BUCKET_ID]', ID.unique(), InputFile.from_path('/pat
 > - **Forgetting permissions** — the resource becomes inaccessible to all users (including the creator)
 > - **`Role.any()` with `write`/`update`/`delete`** — allows any user, including unauthenticated guests, to modify or remove the resource
 > - **`Permission.read(Role.any())` on sensitive data** — makes the resource publicly readable
-

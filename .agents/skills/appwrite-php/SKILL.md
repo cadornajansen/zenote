@@ -383,4 +383,3 @@ $file = $storage->createFile('[BUCKET_ID]', ID::unique(), InputFile::withPath('/
 > - **Forgetting permissions** — the resource becomes inaccessible to all users (including the creator)
 > - **`Role::any()` with `write`/`update`/`delete`** — allows any user, including unauthenticated guests, to modify or remove the resource
 > - **`Permission::read(Role::any())` on sensitive data** — makes the resource publicly readable
-

@@ -465,4 +465,3 @@ f, err := service.CreateFile(
 > - **Forgetting permissions** — the resource becomes inaccessible to all users (including the creator)
 > - **`role.Any()` with `write`/`update`/`delete`** — allows any user, including unauthenticated guests, to modify or remove the resource
 > - **`permission.Read(role.Any())` on sensitive data** — makes the resource publicly readable
-
