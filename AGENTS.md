@@ -1,3 +1,7 @@
+<!-- BEGIN:nextjs-agent-rules -->
+
+# This is NOT the Next.js you know
+
 # Zenote agent instructions
 
 Zenote is a polished commercial AI chat SaaS. Its current product focus is a familiar ChatGPT-style chat experience, not a broad productivity or agent platform.
@@ -19,6 +23,67 @@ Zenote is a polished commercial AI chat SaaS. Its current product focus is a fam
 - Keep secrets and provider credentials on the server.
 - Keep provider-specific AI logic behind server-side abstractions.
 - Make usage and billing calculations auditable.
+
+## Agent orchestration
+
+The primary `build` agent owns implementation, code edits, final technical decisions, and final fixes. Specialized subagents exist to reduce primary-model cost and context usage.
+
+### Roles
+
+- `explore` — DeepSeek V4 Flash. Use for repository discovery: locating files, tracing existing implementations, finding symbols, dependencies, types, call paths, and relevant tests.
+- `research` — Gemini 3.7 Flash. Use for external documentation, APIs, libraries, upstream implementations, Context7, AnySearch, and current web research.
+- `architect` — GPT-5.6 Sol. Use only for difficult, ambiguous, high-impact architecture or implementation decisions where a strong second opinion materially helps.
+- `test` — GPT-5 Mini. Use to run lint, typecheck, tests, and builds and diagnose verification failures. It must not edit application code.
+- `review` — GLM 5 on Amazon Bedrock. Use for independent review of substantial, risky, security-sensitive, or architecture-heavy changes. It must not edit application code.
+
+### Delegation rules
+
+Do not delegate trivial work.
+
+For normal implementation tasks:
+
+1. Use `explore` when the relevant implementation or files are not already known.
+2. Use `research` when correctness depends on external documentation, APIs, libraries, or current information.
+3. Run independent `explore` and `research` work in parallel when both are needed.
+4. Use `architect` only when the decision is genuinely difficult, ambiguous, expensive to reverse, or architecturally important.
+5. The primary `build` agent decides on the implementation and performs all normal source-code edits.
+6. After meaningful changes, delegate verification to `test`.
+7. For substantial or risky changes, delegate an independent review to `review`.
+8. The primary `build` agent evaluates subagent findings and performs any final fixes.
+
+### Cost and context discipline
+
+- Do not use Azure GPT-6 Astra for broad file hunting, repetitive grep/read work, generic web research, or routine test execution when a specialized subagent can do it.
+- Do not invoke GPT-5.6 Sol for routine work. Reserve it for decisions that benefit from deeper architectural reasoning.
+- Prefer DeepSeek `explore` for repository discovery because this work is high-volume and disposable.
+- Prefer Gemini `research` for large documentation and web-research contexts.
+- Prefer GPT-5 Mini for mechanical verification and failure diagnosis.
+- Prefer GLM 5 as an independent second opinion rather than another implementation agent.
+- Keep subagent responses concise and decision-oriented. Return relevant paths, findings, errors, and recommendations instead of dumping entire files or research transcripts.
+- Avoid multiple agents independently editing the same implementation.
+- Do not create agent chains when the primary agent already has enough context to solve a small task directly.
+
+### Typical workflows
+
+Small change:
+
+`build → implement`
+
+Normal coding task:
+
+`explore → build → test`
+
+External API/library task:
+
+`explore + research in parallel → build → test`
+
+Difficult architecture task:
+
+`explore + research → architect → build → test → review → build final fixes`
+
+Security-sensitive or high-risk task:
+
+`explore → build → test + review → build final fixes`
 
 ## UI behavior
 
@@ -59,12 +124,6 @@ Do not independently add autonomous agents, RAG, vector databases, workflows, au
 3. Run the relevant existing lint, typecheck, test, and/or build command after meaningful changes.
 4. Summarize only meaningful implementation changes.
 
-<!-- BEGIN:nextjs-agent-rules -->
-
-# This is NOT the Next.js you know
-
-This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` before writing any code. Heed deprecation notices.
-<!-- END:nextjs-agent-rules -->
 
 ## Zenote visual system
 
@@ -72,3 +131,15 @@ This version has breaking changes — APIs, conventions, and file structure may 
 - Inspect `components/ui` first. Prefer existing shadcn/Base UI primitives and preserve their accessibility behavior.
 - For visual work, use the Taste Skill and consult 21st/shadcn design resources when they solve a concrete need. Adapt every external pattern to Zenote; do not import a mismatched visual language unchanged.
 - Use the dark charcoal and restrained copper token system in `app/globals.css`. Avoid generic AI-generated SaaS patterns such as bento overload, fake social proof, excessive pills, rainbow gradients, and decorative glass.
+
+### Research tool discipline
+
+- Prefer Context7 for framework, SDK, and library documentation.
+- Use AnySearch for discovery and extraction.
+- If `anysearch_extract` fails once for a URL, do not retry it repeatedly; use `webfetch` instead.
+- Prefer official documentation and upstream repositories.
+- Avoid issuing several near-identical searches for the same question.
+- Stop researching once enough authoritative evidence exists.
+
+This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` before writing any code. Heed deprecation notices.
+<!-- END:nextjs-agent-rules -->
