@@ -1,4 +1,12 @@
 export type ChatInputMessage = { role: "user" | "assistant"; content: string }
+
+export const quickActions = [
+  { label: "Create", prompt: "Create a concise outline for " },
+  { label: "Analyze image", prompt: "Analyze this image and highlight the important details." },
+  { label: "Help me code", prompt: "Help me debug this code: " },
+  { label: "Explain", prompt: "Explain this clearly with a practical example: " },
+]
+
 export type ChatRequest = { model: string; messages: ChatInputMessage[] }
 export type ChatEvent =
   | { type: "delta"; text: string }
@@ -45,11 +53,15 @@ export async function* readSseData(body: ReadableStream<Uint8Array>) {
 export async function sendMessage({
   model,
   messages,
+  conversationId,
+  messageId,
   signal,
   onStatus,
   onChunk,
   onMetadata,
 }: ChatRequest & {
+  conversationId: string
+  messageId: string
   signal: AbortSignal
   onStatus: (status: "thinking" | "streaming" | "complete") => void
   onChunk: (chunk: string) => void
@@ -59,7 +71,7 @@ export async function sendMessage({
   const response = await fetch("/api/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model, messages }),
+    body: JSON.stringify({ model, messages, conversationId, messageId }),
     signal,
   })
   if (!response.ok) {

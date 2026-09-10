@@ -6,7 +6,18 @@ import ts from "typescript"
 
 // Run the actual TypeScript boundaries without adding a runtime/test dependency.
 let user = null
+let savedMessages = []
+let saveError = false
+let missingPrompt = false
 globalThis.__chatTestUser = () => user
+globalThis.__chatTestPrompt = () => {
+  if (missingPrompt) throw new Error("not accessible")
+  return { content: "Hello" }
+}
+globalThis.__chatTestSave = (conversationId, input) => {
+  if (saveError) throw new Error("database details must stay private")
+  savedMessages.push({ conversationId, ...input })
+}
 registerHooks({
   resolve(specifier, context, next) {
     if (specifier === "server-only")
@@ -14,6 +25,11 @@ registerHooks({
     if (specifier === "@/lib/auth")
       return {
         url: "data:text/javascript,export async function getCurrentUser(){return globalThis.__chatTestUser()}",
+        shortCircuit: true,
+      }
+    if (specifier === "@/lib/db")
+      return {
+        url: "data:text/javascript,export class DbError extends Error{}; export const getUserMessage=async()=>globalThis.__chatTestPrompt(); export const createMessage=async(...args)=>globalThis.__chatTestSave(...args)",
         shortCircuit: true,
       }
     if (specifier.startsWith("@/"))
@@ -58,6 +74,9 @@ afterEach(() => {
   globalThis.fetch = originalFetch
   console.info = originalLog
   user = null
+  savedMessages = []
+  saveError = false
+  missingPrompt = false
   if (originalKey === undefined) delete process.env.ASSEMBLYAI_API_KEY
   else process.env.ASSEMBLYAI_API_KEY = originalKey
   if (originalBase === undefined) delete process.env.ASSEMBLYAI_LLM_BASE_URL
@@ -110,7 +129,7 @@ function request(body = input, headers = {}) {
   return new Request("http://localhost:3000/api/chat", {
     method: "POST",
     headers: { "content-type": "application/json", ...headers },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ conversationId: "test-conversation", messageId: "test-message", ...body }),
   })
 }
 
@@ -308,6 +327,7 @@ test("route streams normalized events and logs no prompt/key", async () => {
   assert.equal(logs[0].status, "complete")
   assert.equal(logs[0].actualModel, "gpt-5.6-luna")
   assert.doesNotMatch(JSON.stringify(logs), /Hello|test-key-not-a-secret/)
+  assert.deepEqual(savedMessages, [{ conversationId: "test-conversation", modelId: "gpt-5-mini", role: "assistant", content: "Hello 世界", parentMessageId: "test-message" }])
 })
 
 test("client keeps the mock-compatible callbacks and fails on missing terminal event", async () => {
@@ -319,6 +339,8 @@ test("client keeps the mock-compatible callbacks and fails on missing terminal e
     )
   const options = {
     ...input,
+    conversationId: "test-conversation",
+    messageId: "test-message",
     signal: new AbortController().signal,
     onStatus: (status) => statuses.push(status),
     onChunk: (chunk) => chunks.push(chunk),
@@ -360,4 +382,35 @@ test("stopping downstream propagates abort to the upstream provider", async () =
   await new Promise((resolve) => setTimeout(resolve, 10))
   assert.equal(upstreamSignal.aborted, true)
   assert.equal(logs[0].status, "aborted")
+  assert.equal(savedMessages.length, 0)
+})
+
+test("route rejects unsaved, inaccessible, or mismatched prompts before provider access", async () => {
+  user = { $id: "test-user" }
+  console.info = () => {}
+  globalThis.fetch = () => { throw new Error("must not call gateway") }
+  assert.equal((await POST(request({ ...input, messageId: null }))).status, 400)
+  assert.equal((await POST(request({ ...input, messages: [{ role: "user", content: "Not saved" }] }))).status, 400)
+  missingPrompt = true
+  assert.equal((await POST(request())).status, 503)
+  assert.equal(savedMessages.length, 0)
+})
+
+test("generation and final-save failures never emit done or persist a fake reply", async () => {
+  configure()
+  user = { $id: "test-user" }
+  console.info = () => {}
+  globalThis.fetch = async () => new Response(frame({ choices: [{ delta: { content: "partial" } }] }), { headers: { "content-type": "text/event-stream" } })
+  let response = await POST(request())
+  let events = (await Array.fromAsync(readSseData(response.body))).map(JSON.parse)
+  assert.equal(events.at(-1).type, "error")
+  assert.equal(savedMessages.length, 0)
+  saveError = true
+  globalThis.fetch = async () => gatewayResponse()
+  response = await POST(request())
+  events = (await Array.fromAsync(readSseData(response.body))).map(JSON.parse)
+  assert.equal(events.at(-1).type, "error")
+  assert.match(events.at(-1).message, /could not be saved/)
+  assert.doesNotMatch(events.at(-1).message, /database details/)
+  assert.equal(savedMessages.length, 0)
 })

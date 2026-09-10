@@ -8,6 +8,7 @@ import {
   type ChatTelemetry,
 } from "@/lib/ai"
 import type { ChatEvent } from "@/lib/chat"
+import { createMessage, DbError, getUserMessage } from "@/lib/db"
 
 export const runtime = "nodejs"
 
@@ -68,6 +69,18 @@ export async function POST(request: Request) {
       throw new ChatError("Invalid chat request.")
     }
     const input = validateChatRequest(parsed)
+    const { conversationId, messageId } = parsed as Record<string, unknown>
+    if (typeof conversationId !== "string" || typeof messageId !== "string")
+      throw new ChatError("Save your message before generating a response.")
+    try {
+      const prompt = await getUserMessage(conversationId, messageId)
+      const last = input.messages.at(-1)
+      if (last?.role !== "user" || last.content !== prompt.content)
+        throw new ChatError("The saved message does not match this request.")
+    } catch (error) {
+      if (error instanceof ChatError) throw error
+      throw new ChatError(error instanceof DbError ? error.message : "The saved message could not be loaded.", error instanceof DbError ? error.status : 503)
+    }
     telemetry.requestedModel = input.model
     const events = await streamChat(input, signal, telemetry)
     const encoder = new TextEncoder()
@@ -80,8 +93,17 @@ export async function POST(request: Request) {
         }
         try {
           emit({ type: "metadata", requestId: telemetry.requestId })
-          for await (const event of events) emit(event)
+          let content = ""
+          for await (const event of events) {
+            if (event.type === "delta") content += event.text
+            emit(event)
+          }
           signal.throwIfAborted()
+          try {
+            await createMessage(conversationId, { modelId: input.model, role: "assistant", content, parentMessageId: messageId }, signal)
+          } catch {
+            throw new ChatError("The response could not be saved. Your message is still in this chat.", 503)
+          }
           telemetry.status = "complete"
           emit({ type: "done" })
         } catch (error) {

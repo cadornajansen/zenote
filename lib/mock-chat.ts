@@ -161,16 +161,3 @@ export const mockMessages: MockMessage[] = [
     ],
   },
 ]
-
-export const quickActions = [
-  { label: "Create", prompt: "Create a concise outline for " },
-  {
-    label: "Analyze image",
-    prompt: "Analyze this image and highlight the important details.",
-  },
-  { label: "Help me code", prompt: "Help me debug this code: " },
-  {
-    label: "Explain",
-    prompt: "Explain this clearly with a practical example: ",
-  },
-]

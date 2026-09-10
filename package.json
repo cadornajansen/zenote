@@ -10,7 +10,8 @@
     "lint": "eslint",
     "format": "prettier --write \"**/*.{ts,tsx}\"",
     "typecheck": "tsc --noEmit",
-    "test": "node --test tests/*.test.mjs"
+    "test": "node --test tests/*.test.mjs",
+    "setup:appwrite": "node --env-file-if-exists=.env.local scripts/setup-appwrite.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.8.0",

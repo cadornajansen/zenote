@@ -2,7 +2,7 @@
 
 ## Current repository
 
-Zenote is a Next.js 16.2.6 App Router project using pnpm, TypeScript, Tailwind CSS 4, and shadcn/ui (Base Nova). The public site, Appwrite authentication, and authenticated chat interface are implemented. Authentication uses Appwrite Account APIs, server actions, an HTTP-only session cookie, and server-enforced protected layouts. Chat now uses real AssemblyAI LLM Gateway streaming through authenticated `POST /api/chat`. Conversation state is client-local; sidebar/history fixtures remain. Appwrite conversation persistence, TablesDB, Storage, and billing are not implemented.
+Zenote is a Next.js 16.2.6 App Router project using pnpm, TypeScript, Tailwind CSS 4, and shadcn/ui (Base Nova). The public site, Appwrite authentication, and authenticated chat interface are implemented. Authentication uses Appwrite Account APIs, server actions, an HTTP-only session cookie, and server-enforced protected layouts. Chat uses real AssemblyAI LLM Gateway streaming through authenticated `POST /api/chat`. Phase 2 persists users, conversations, messages, user preferences, and a mirror of the model registry in Appwrite TablesDB. Storage, durable usage accounting, and billing remain planned.
 
 ## Locked V1 platform direction
 
@@ -48,18 +48,21 @@ lib/
   appwrite.ts          # browser-safe Appwrite client
   appwrite-server.ts   # server and session client factories
   auth.ts              # authentication operations
+  db.ts                # session-authorized TablesDB operations and profile bootstrap
   ai.ts                # server-only gateway, context, telemetry, tool contracts
   models.ts            # centralized model IDs, capabilities, caching, fallbacks
   chat.ts              # browser transport, shared messages and SSE framing
   attachments.ts       # normalized attachment and AWS processor contracts only
-  mock-chat.ts         # temporary local history fixtures and UI-compatible types
+  mock-chat.ts         # dev fixtures and type-only UI contracts; no live fixture data
   utils.ts
+scripts/
+  setup-appwrite.mjs   # idempotent five-table provisioning and registry seeding
 docs/
 ```
 
 Route groups organize code without appearing in URLs. The public layout resolves optional auth state for its navbar. The `(app)` layout resolves the current Appwrite user on the server and redirects unauthenticated requests before rendering protected content.
 
-Use `(public)` for marketing/legal routes, `(auth)` for account entry and recovery, and `(app)` for authenticated product routes. The `(app)` layout owns the responsive sidebar shell. `/chat` and `/chat/[id]` share one client workspace with real, abortable idle-to-thinking-to-streaming responses. `/chat/[id]` still loads fixture history, not saved conversations.
+Use `(public)` for marketing/legal routes, `(auth)` for account entry and recovery, and `(app)` for authenticated product routes. The `(app)` layout ensures the Auth-linked profile and loads real sidebar history. `/chat` loads the default model without creating an empty conversation. `/chat/[id]` authorizes and restores the saved conversation and its latest 100 messages. Both share the existing abortable idle-to-thinking-to-streaming workspace. Native URL replacement preserves the first response's mounted UI and scroll state; returning to `/chat` resets the conversation state.
 
 ## Current authentication flow
 
@@ -86,34 +89,44 @@ Keep boundaries direct and small when they become necessary:
 - `components/`: mostly flat reusable presentation components. Check `components/ui` before adding UI primitives.
 - `lib/ai.ts`: server-side Zenote AI abstraction; provider-specific SDK logic must not reach UI components or scatter across routes.
 - `lib/models.ts`: one Zenote-facing model registry and model IDs; provider model IDs stay internal.
-- `lib/db.ts`: future Appwrite TablesDB operations only when database implementation is explicitly requested.
+- `lib/db.ts`: implemented TablesDB boundary for profiles, conversations/messages, and preferences; authenticated sessions enforce row permissions. Only missing-profile bootstrap uses a narrowly scoped trusted-server write.
 - `lib/usage.ts`: future usage checks, consumption calculation, limit enforcement, and auditable event recording.
 - `lib/billing.ts`: future PayMongo boundary, independent from provider object shapes.
 - `lib/storage.ts`: future provider-independent attachment storage boundary, initially backed by Appwrite Storage when implemented.
 
 `types/` is reserved for shared types only when an implemented boundary needs them. Do not create empty type declarations or fake implementations.
 
-## Phase 1 request flow
+## Persisted request flow
 
 ```text
 Chat UI
-   ↓
+    ↓
+server action: commit user prompt + conversation/activity in TablesDB
+    ↓
+replace first-send URL with /chat/{id}, keeping streaming UI mounted
+    ↓
 POST /api/chat
    ↓
 authenticate
    ↓
-validate model and bounded client message history
+authorize saved prompt and validate model and bounded client message history
    ↓
 build stable context and call AssemblyAI with one fallback
    ↓
 normalize SSE deltas, actual model metadata, and safe errors
    ↓
 stream response to existing chat UI (abort propagates upstream)
-   ↓
+    ↓
+commit completed assistant response + activity timestamp, then emit done
+    ↓
 log structured completion/error/abort telemetry, without prompts
 ```
 
-This text flow is implemented. `buildConversationContext` takes normalized user/assistant messages; a future DB history reader can supply the same boundary. Client system/tool roles are rejected. Input size, message count, text capabilities, and output length are bounded. Requests time out after three minutes. Failed/truncated streams are not marked complete; partial text is retained. Stop and unmount cancel the upstream request.
+This text flow is implemented. `buildConversationContext` takes normalized user/assistant messages from the bounded client history, initially restored from TablesDB. The saved current prompt must belong to the session's conversation and match the request. Client system/tool roles are rejected. Input size, message count, text capabilities, and output length are bounded. Requests time out after three minutes. Failed/truncated streams are not marked complete; partial text is retained in the UI only. Stop and unmount cancel upstream, and abort before the final database commit rolls back the response write. A late disconnect after a complete response commits does not undo valid history. Failed/stopped partial responses are excluded from subsequent context. No per-token database writes occur.
+
+The first conversation title is cleaned/truncated prompt text, never an additional LLM request. First-send creation and every message/activity update use session-authorized Appwrite transactions. Successful replies use one stable response ID per user prompt. The sidebar holds at most 100 real, non-archived conversations sorted by activity; rename/archive/delete use existing controls. Message deletion uses bounded individually authorized batches, not admin bulk deletion. Model selection persists a default preference for new chats, while existing conversations restore their last-used model. Prompt customization fields exist in the schema but do not change Phase 1 prompt behavior.
+
+Provision with `pnpm setup:appwrite` after configuring an existing database and the server-only setup key. `scripts/setup-appwrite.mjs` creates missing resources, waits for readiness, reconciles permissions, and mirrors `lib/models.ts` without deleting existing data or adding a migration framework. Runtime routing and the picker still use the code registry. See [database.md](database.md) for exact fields, indexes, key scopes, and the live persistence smoke test.
 
 Prompts put the stable system instruction first, older history next, optional trusted-processor attachment context next, then recent messages/current user input. No tools are sent. OpenAI/Gemini caching is automatic; Claude gets message-level ephemeral breakpoints on the system and older context. Fallback messages are rebuilt without unsupported cache controls. Cache hits require provider minimum lengths and are not guaranteed.
 
@@ -131,4 +144,6 @@ For an opt-in billable gateway smoke test, run `node --env-file=.env.local tests
 
 Secrets, including Appwrite API keys, AI provider credentials, AWS credentials, payment credentials, and webhook secrets remain server-only. Browser clients do not determine entitlements, prices, usage totals, provider selection, or trusted billing state. Provider fallback must preserve compatible model semantics, requested capabilities, and correct accounting; it must not silently choose expensive models without usage controls.
 
-See [tech-stack.md](tech-stack.md) for the V1 technology contract and [database.md](database.md) for the planned database schema. The database document is documentation only and does not authorize Appwrite schema implementation.
+Conversations/messages/preferences have row security with owner-only read/update/delete ACLs and table-level authenticated create only. Queries additionally filter by the authenticated owner, and ID lookups check ownership; `userId` is not authorization. Models are authenticated-read-only and provisioner-write-only. Profiles are owner-read-only, with trusted bootstrap bound to the verified Auth ID and `role: user`; no client may change the role column or claim another user's profile ID. The existing auth implementation is unchanged. No Realtime or shared cross-user history cache is introduced.
+
+See [tech-stack.md](tech-stack.md) for the V1 technology contract and [database.md](database.md) for the five implemented tables and the explicitly deferred schema.

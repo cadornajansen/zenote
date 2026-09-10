@@ -20,17 +20,34 @@ import {
 } from "lucide-react"
 
 import { signOutAction } from "@/app/(auth)/actions"
+import { changeConversationAction } from "@/app/(app)/chat/actions"
+import { useConversations } from "@/components/app-shell"
+import { ArchivedChats } from "@/components/archived-chats"
 import { ThemePreference } from "@/components/theme-preference"
 import { ZenoteLogo } from "@/components/zenote-logo"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
+  DialogClose,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import { Field, FieldLabel } from "@/components/ui/field"
+import { Input } from "@/components/ui/input"
 import {
   Command,
   CommandDialog,
@@ -63,17 +80,19 @@ import {
   SidebarMenuItem,
   useSidebar,
 } from "@/components/ui/sidebar"
-import { mockConversations } from "@/lib/mock-chat"
+import type { Conversation } from "@/lib/db"
 
 type AppSidebarProps = {
   user: { name: string; email: string }
+  initialArchivedConversations: Conversation[]
 }
 
-type SettingsSection = "general" | "appearance" | "help"
+type SettingsSection = "general" | "appearance" | "archived" | "help"
 
 const settingsSections = [
   { id: "general", label: "General", icon: SettingsIcon },
   { id: "appearance", label: "Appearance", icon: PaletteIcon },
+  { id: "archived", label: "Archived chats", icon: ArchiveIcon },
   { id: "help", label: "Help", icon: CircleHelpIcon },
 ] satisfies {
   id: SettingsSection
@@ -93,6 +112,10 @@ const settingsCopy: Record<
     title: "Appearance",
     description: "Choose how the authenticated chat surface looks.",
   },
+  archived: {
+    title: "Archived chats",
+    description: "Review, restore, or permanently delete archived chats.",
+  },
   help: {
     title: "Help",
     description: "Shortcuts and guidance for using Zenote chat.",
@@ -108,7 +131,13 @@ function initials(name: string, email: string) {
     .join("")
 }
 
-export function AppSidebar({ user }: AppSidebarProps) {
+export function AppSidebar({
+  user,
+  initialArchivedConversations,
+}: AppSidebarProps) {
+  const { conversations, setConversations } = useConversations()
+  const [mutationError, setMutationError] = useState<string>()
+  const [mutating, setMutating] = useState(false)
   const pathname = usePathname()
   const router = useRouter()
   const { setOpenMobile, toggleSidebar } = useSidebar()
@@ -116,10 +145,61 @@ export function AppSidebar({ user }: AppSidebarProps) {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settingsSection, setSettingsSection] =
     useState<SettingsSection>("general")
+  const [archivedConversations, setArchivedConversations] = useState(
+    initialArchivedConversations
+  )
+  const [pendingAction, setPendingAction] = useState<{
+    type: "rename" | "delete"
+    conversation: Conversation
+  } | null>(null)
+  const [renameTitle, setRenameTitle] = useState("")
 
   function goToChat(id?: string) {
     router.push(id ? `/chat/${id}` : "/chat")
     setOpenMobile(false)
+    setSearchOpen(false)
+  }
+
+  async function changeConversation(
+    conversation: Conversation,
+    action: "rename" | "archive" | "delete",
+    title?: string
+  ) {
+    setMutationError(undefined)
+    setMutating(true)
+    try {
+      const result = await changeConversationAction(
+        conversation.$id,
+        action,
+        title
+      )
+      if (result.error) {
+        setMutationError(result.error)
+        return false
+      } else {
+        setConversations(result.conversations!)
+        if (action === "archive") {
+          setArchivedConversations((current) => [
+            { ...conversation, isArchived: true },
+            ...current.filter((item) => item.$id !== conversation.$id),
+          ])
+        }
+        if (action === "delete") {
+          setArchivedConversations((current) =>
+            current.filter((item) => item.$id !== conversation.$id)
+          )
+        }
+        setPendingAction(null)
+        if (action !== "rename" && pathname === `/chat/${conversation.$id}`)
+          goToChat()
+        return true
+      }
+    } catch {
+      setMutationError("Your changes could not be saved. Please try again.")
+      return false
+    } finally {
+      setMutating(false)
+    }
   }
 
   function openSettings() {
@@ -211,20 +291,26 @@ export function AppSidebar({ user }: AppSidebarProps) {
         </SidebarHeader>
 
         <SidebarContent>
+          {mutationError && (
+            <p role="alert" className="px-3 text-xs text-destructive">
+              {mutationError}
+            </p>
+          )}
           <SidebarGroup className="pt-3 group-data-[collapsible=icon]:hidden">
             <SidebarGroupLabel className="h-7 px-2">Recent</SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu className="space-y-1 px-1">
-                {mockConversations.map((conversation) => (
-                  <SidebarMenuItem key={conversation.id} className="py-px">
+                {conversations.map((conversation) => (
+                  <SidebarMenuItem key={conversation.$id} className="py-px">
                     <SidebarMenuButton
                       render={
                         <Link
-                          href={`/chat/${conversation.id}`}
+                          href={`/chat/${conversation.$id}`}
+                          prefetch={false}
                           onClick={() => setOpenMobile(false)}
                         />
                       }
-                      isActive={pathname === `/chat/${conversation.id}`}
+                      isActive={pathname === `/chat/${conversation.$id}`}
                       className="h-9 px-2 pr-8 text-[13px]"
                     >
                       <span>{conversation.title}</span>
@@ -245,14 +331,33 @@ export function AppSidebar({ user }: AppSidebarProps) {
                         align="start"
                         className="w-40"
                       >
-                        <DropdownMenuItem>
+                        <DropdownMenuItem
+                          disabled={mutating}
+                          onClick={() => {
+                            setMutationError(undefined)
+                            setRenameTitle(conversation.title)
+                            setPendingAction({ type: "rename", conversation })
+                          }}
+                        >
                           <PencilIcon /> Rename
                         </DropdownMenuItem>
-                        <DropdownMenuItem>
+                        <DropdownMenuItem
+                          disabled={mutating}
+                          onClick={() =>
+                            void changeConversation(conversation, "archive")
+                          }
+                        >
                           <ArchiveIcon /> Archive
                         </DropdownMenuItem>
                         <DropdownMenuSeparator />
-                        <DropdownMenuItem variant="destructive">
+                        <DropdownMenuItem
+                          variant="destructive"
+                          disabled={mutating}
+                          onClick={() => {
+                            setMutationError(undefined)
+                            setPendingAction({ type: "delete", conversation })
+                          }}
+                        >
                           <Trash2Icon /> Delete
                         </DropdownMenuItem>
                       </DropdownMenuContent>
@@ -346,16 +451,18 @@ export function AppSidebar({ user }: AppSidebarProps) {
           <CommandList>
             <CommandEmpty>No chats found.</CommandEmpty>
             <CommandGroup heading="Recent chats">
-              {mockConversations.map((conversation) => (
+              {conversations.map((conversation) => (
                 <CommandItem
-                  key={conversation.id}
+                  key={conversation.$id}
                   value={conversation.title}
-                  onSelect={() => goToChat(conversation.id)}
+                  onSelect={() => goToChat(conversation.$id)}
                 >
                   <MessageSquareIcon />
                   <span className="truncate">{conversation.title}</span>
                   <span className="ml-auto text-xs text-muted-foreground">
-                    {conversation.updatedAt}
+                    {new Date(
+                      conversation.lastMessageAt || conversation.$updatedAt
+                    ).toLocaleDateString()}
                   </span>
                 </CommandItem>
               ))}
@@ -368,7 +475,10 @@ export function AppSidebar({ user }: AppSidebarProps) {
         <DialogContent className="h-[min(42rem,calc(100svh-2rem))] w-[calc(100%-2rem)] max-w-none grid-cols-1 gap-0 overflow-hidden bg-[#111111] p-0 text-[#f2f2f2] ring-white/10 sm:max-w-[54rem] sm:grid-cols-[15.5rem_minmax(0,1fr)]">
           <aside className="flex min-h-0 flex-col border-r border-white/[0.09] p-3 max-sm:hidden">
             <p className="px-2 pt-1 text-sm font-medium">Settings</p>
-            <nav className="mt-5 space-y-1" aria-label="Settings sections">
+            <nav
+              className="mt-5 flex flex-col gap-1"
+              aria-label="Settings sections"
+            >
               {settingsSections.map((section) => {
                 const Icon = section.icon
                 return (
@@ -451,6 +561,14 @@ export function AppSidebar({ user }: AppSidebarProps) {
                 </div>
               </div>
             )}
+            {settingsSection === "archived" && (
+              <div className="py-5">
+                <ArchivedChats
+                  conversations={archivedConversations}
+                  onConversationsChange={setArchivedConversations}
+                />
+              </div>
+            )}
             {settingsSection === "help" && (
               <div className="divide-y divide-white/[0.09] py-1">
                 <div className="flex items-center justify-between gap-4 py-4 text-sm">
@@ -466,6 +584,98 @@ export function AppSidebar({ user }: AppSidebarProps) {
           </section>
         </DialogContent>
       </Dialog>
+
+      <Dialog
+        open={pendingAction?.type === "rename"}
+        onOpenChange={(open) => {
+          if (!open && !mutating) setPendingAction(null)
+        }}
+      >
+        <DialogContent showCloseButton={!mutating}>
+          <form
+            className="flex flex-col gap-4"
+            onSubmit={async (event) => {
+              event.preventDefault()
+              if (pendingAction?.type !== "rename") return
+              await changeConversation(
+                pendingAction.conversation,
+                "rename",
+                renameTitle
+              )
+            }}
+          >
+            <DialogHeader>
+              <DialogTitle>Rename chat</DialogTitle>
+              <DialogDescription>
+                Choose a short name that will be easy to find later.
+              </DialogDescription>
+            </DialogHeader>
+            <Field>
+              <FieldLabel htmlFor="conversation-title">Chat name</FieldLabel>
+              <Input
+                id="conversation-title"
+                value={renameTitle}
+                onChange={(event) => setRenameTitle(event.target.value)}
+                maxLength={120}
+                autoFocus
+                required
+                disabled={mutating}
+              />
+            </Field>
+            {mutationError && (
+              <p role="alert" className="text-sm text-destructive">
+                {mutationError}
+              </p>
+            )}
+            <DialogFooter>
+              <DialogClose
+                disabled={mutating}
+                render={<Button type="button" variant="outline" />}
+              >
+                Cancel
+              </DialogClose>
+              <Button type="submit" disabled={mutating || !renameTitle.trim()}>
+                {mutating ? "Saving..." : "Save"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog
+        open={pendingAction?.type === "delete"}
+        onOpenChange={(open) => {
+          if (!open && !mutating) setPendingAction(null)
+        }}
+      >
+        <AlertDialogContent size="sm">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this chat?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This permanently removes the conversation and its messages. This
+              action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          {mutationError && (
+            <p role="alert" className="text-sm text-destructive">
+              {mutationError}
+            </p>
+          )}
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={mutating}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              disabled={mutating}
+              onClick={() => {
+                if (pendingAction?.type === "delete")
+                  void changeConversation(pendingAction.conversation, "delete")
+              }}
+            >
+              {mutating ? "Deleting..." : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   )
 }

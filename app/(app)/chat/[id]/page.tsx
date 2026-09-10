@@ -1,7 +1,9 @@
 import type { Metadata } from "next"
+import { notFound } from "next/navigation"
 
 import { ChatWorkspace } from "@/components/chat-workspace"
-import { mockConversations, mockMessages } from "@/lib/mock-chat"
+import { DbError, getConversation, listMessages } from "@/lib/db"
+import type { MockMessage } from "@/lib/mock-chat"
 
 export const metadata: Metadata = { title: "Conversation" }
 
@@ -11,12 +13,26 @@ export default async function ConversationPage({
   params: Promise<{ id: string }>
 }) {
   const { id } = await params
-  const conversation = mockConversations.find((item) => item.id === id)
+  const conversation = await getConversation(id).catch((error) => {
+    if (error instanceof DbError && error.status === 404) notFound()
+    throw error
+  })
+  const messages = await listMessages(id)
+  const initialMessages: MockMessage[] = messages
+    .filter((message) => message.role === "user" || message.role === "assistant")
+    .map((message) => ({
+      id: message.$id,
+      role: message.role as "user" | "assistant",
+      content: message.content,
+      status: message.status === "completed" ? "complete" : "failed",
+    }))
 
   return (
     <ChatWorkspace
-      initialMessages={mockMessages}
-      title={conversation?.title ?? "Demo conversation"}
+      initialConversationId={conversation.$id}
+      initialModelId={conversation.modelId}
+      initialMessages={initialMessages}
+      title={conversation.title}
     />
   )
 }

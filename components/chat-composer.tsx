@@ -1,9 +1,8 @@
 "use client"
 
-import { useEffect, useRef, useState } from "react"
+import { useLayoutEffect, useRef, useState } from "react"
 import {
   ArrowUpIcon,
-  FileIcon,
   FileTextIcon,
   ImageIcon,
   MicIcon,
@@ -28,9 +27,7 @@ import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuGroup,
   DropdownMenuItem,
-  DropdownMenuLabel,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Spinner } from "@/components/ui/spinner"
@@ -39,7 +36,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
-import { mockAttachments, type MockAttachment } from "@/lib/mock-chat"
+import type { MockAttachment } from "@/lib/mock-chat"
 import { cn } from "@/lib/utils"
 
 type ChatComposerProps = {
@@ -78,16 +75,11 @@ export function ChatComposer({
   const [dragging, setDragging] = useState(false)
   const active = status !== "idle"
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!textareaRef.current) return
     textareaRef.current.style.height = "0px"
     textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 192)}px`
   }, [value])
-
-  function addAttachment(attachment: MockAttachment) {
-    if (attachments.some((item) => item.id === attachment.id)) return
-    onAttachmentsChange([...attachments, { ...attachment }])
-  }
 
   function addFiles(files: FileList | File[]) {
     const next = Array.from(files).map((file, index): MockAttachment => ({
@@ -244,17 +236,6 @@ export function ChatComposer({
             <DropdownMenuItem onClick={() => inputRef.current?.click()}>
               <PaperclipIcon /> Choose files
             </DropdownMenuItem>
-            <DropdownMenuGroup>
-              <DropdownMenuLabel>Preview states</DropdownMenuLabel>
-              {mockAttachments.map((attachment) => (
-                <DropdownMenuItem
-                  key={attachment.id}
-                  onClick={() => addAttachment(attachment)}
-                >
-                  <FileIcon /> {attachment.name}
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuGroup>
           </DropdownMenuContent>
         </DropdownMenu>
 
