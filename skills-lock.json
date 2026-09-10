@@ -1,6 +1,72 @@
 {
   "version": 1,
   "skills": {
+    "appwrite-cli": {
+      "source": "appwrite/skills",
+      "sourceType": "github",
+      "skillPath": "skills/appwrite-cli/SKILL.md",
+      "computedHash": "1c6ba8029433edffcb9b5e1d8660a0a60eeed7493bb514e76d9f4805b0138f97"
+    },
+    "appwrite-dart": {
+      "source": "appwrite/skills",
+      "sourceType": "github",
+      "skillPath": "skills/appwrite-dart/SKILL.md",
+      "computedHash": "f76559a735e073f815d1830ca1c532c002dcf3d9a82b2e1451fb4a85980526de"
+    },
+    "appwrite-dotnet": {
+      "source": "appwrite/skills",
+      "sourceType": "github",
+      "skillPath": "skills/appwrite-dotnet/SKILL.md",
+      "computedHash": "8782d6025f597ff5dfa2631f59daca4bdbaf0131bb85db1620749e672df33eb8"
+    },
+    "appwrite-go": {
+      "source": "appwrite/skills",
+      "sourceType": "github",
+      "skillPath": "skills/appwrite-go/SKILL.md",
+      "computedHash": "e8709a1de9c61d143eeded7e35e2e0351e9a5ff8f3397fbbe2777502306e0ee8"
+    },
+    "appwrite-kotlin": {
+      "source": "appwrite/skills",
+      "sourceType": "github",
+      "skillPath": "skills/appwrite-kotlin/SKILL.md",
+      "computedHash": "d05c5b7d4c1cfdd731633abb7def296dadd2e016013236fb5a274e7a6035c4f0"
+    },
+    "appwrite-php": {
+      "source": "appwrite/skills",
+      "sourceType": "github",
+      "skillPath": "skills/appwrite-php/SKILL.md",
+      "computedHash": "db9438bcab1f355bf052e26ca92baee04940c0420ac863a2663ba034530e8b7e"
+    },
+    "appwrite-python": {
+      "source": "appwrite/skills",
+      "sourceType": "github",
+      "skillPath": "skills/appwrite-python/SKILL.md",
+      "computedHash": "a54306a66d535fa5b4b8d72fdd250c6dd6a8ae0322f560f40c195c61e1c3401b"
+    },
+    "appwrite-ruby": {
+      "source": "appwrite/skills",
+      "sourceType": "github",
+      "skillPath": "skills/appwrite-ruby/SKILL.md",
+      "computedHash": "87635ee836758bb0123e2ea51b6fe5fb50c1e88372ecc3b0da628f833347d246"
+    },
+    "appwrite-rust": {
+      "source": "appwrite/skills",
+      "sourceType": "github",
+      "skillPath": "skills/appwrite-rust/SKILL.md",
+      "computedHash": "f47741cfa4daf25e7b0170c2240efd4ac61e692fd8d4e485cc8a9ae56d510635"
+    },
+    "appwrite-swift": {
+      "source": "appwrite/skills",
+      "sourceType": "github",
+      "skillPath": "skills/appwrite-swift/SKILL.md",
+      "computedHash": "59292439e8e28e4c9090ea5494e3e5f7a310933c6bd308281c1e9a76c70b3c6b"
+    },
+    "appwrite-typescript": {
+      "source": "appwrite/skills",
+      "sourceType": "github",
+      "skillPath": "skills/appwrite-typescript/SKILL.md",
+      "computedHash": "3efb5d412ca6602cf13058c2671f06d2710a0280c2310b2d32638769e7db3f38"
+    },
     "brandkit": {
       "source": "Leonxlnx/taste-skill",
       "sourceType": "github",
