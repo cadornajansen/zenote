@@ -11,11 +11,13 @@
     "lint": "eslint",
     "format": "prettier --write \"**/*.{ts,tsx}\"",
     "typecheck": "tsc --noEmit && npm --prefix functions/attachment-processor run typecheck",
+    "typecheck:function": "npm --prefix functions/attachment-processor run typecheck",
     "test": "node --test tests/*.test.mjs",
     "setup:appwrite": "node --env-file-if-exists=.env.local scripts/setup-appwrite.mjs",
     "migrate:content-encryption": "node --env-file-if-exists=.env.local scripts/migrate-content-encryption.mjs",
     "benchmark:crypto": "node scripts/crypto-benchmark.mjs",
-    "test:function": "npm --prefix functions/attachment-processor test"
+    "test:function": "npm --prefix functions/attachment-processor test",
+    "verify": "pnpm lint && pnpm typecheck && pnpm test && pnpm test:function && pnpm build:function && pnpm build"
   },
   "dependencies": {
     "@aws-sdk/client-kms": "3.1128.0",
