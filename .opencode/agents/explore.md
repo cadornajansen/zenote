@@ -1,7 +1,7 @@
 ---
 description: Fast read-only repository intelligence. Locate files, trace implementations, inspect types, dependencies, callers, importers, blast radius, and affected tests, and return concise findings with exact paths. Never edits and never researches the web.
 mode: subagent
-model: deepseek-direct/deepseek-flash
+model: deepseek-direct/deepseek-v4.1-flash
 steps: 12
 permission:
   "*": deny

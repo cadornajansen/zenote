@@ -1,7 +1,7 @@
 ---
 description: Read-only external research specialist. Prefer official docs and upstream sources. Use Context7 for framework/SDK docs, AnySearch for discovery/extraction, and webfetch as fallback. Return concise implementation-relevant findings with sources. Never edits.
 mode: subagent
-model: deepseek-direct/deepseek-flash
+model: deepseek-direct/deepseek-v4.1-flash
 steps: 12
 permission:
   "*": deny

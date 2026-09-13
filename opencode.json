@@ -40,7 +40,7 @@
     "build": {
       "description": "Primary Zenote engineering agent. Owns implementation, final technical decisions, fixes, and orchestration of specialized subagents.",
       "mode": "primary",
-      "model": "azure/gpt-6-astra",
+      "model": "openai/gpt-6-astra",
       "permission": {
         "task": {
           "*": "deny",
@@ -55,7 +55,7 @@
     "plan": {
       "description": "Read-only planning agent for implementation planning and technical analysis.",
       "mode": "primary",
-      "model": "azure/gpt-6-astra",
+      "model": "openai/gpt-6-astra",
       "steps": 8,
       "permission": {
         "edit": "deny",
@@ -70,7 +70,7 @@
     "architect": {
       "description": "Senior architecture consultant. Use only for difficult, ambiguous, or high-impact engineering decisions. Challenge complexity and return the simplest robust implementation plan. Never edit.",
       "mode": "subagent",
-      "model": "azure/gpt-6-astra",
+      "model": "azure/gpt-5.6-sol",
       "steps": 6,
       "permission": {
         "read": "allow",

@@ -1,7 +1,7 @@
 ---
 description: Verification specialist. Run relevant lint, typecheck, tests, and production builds. Diagnose failures precisely and report the smallest likely fix. Never edits application code.
 mode: subagent
-model: deepseek-direct/deepseek-flash
+model: deepseek-direct/deepseek-v4.1-flash
 steps: 8
 permission:
   "*": deny
