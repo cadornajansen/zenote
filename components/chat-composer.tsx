@@ -55,6 +55,7 @@ type ChatComposerProps = {
   attachments: MockAttachment[]
   onAttachmentsChange: (attachments: MockAttachment[]) => void
   compact?: boolean
+  creditTotal?: number
 }
 
 function attachmentIcon(type: MockAttachment["type"]) {
@@ -74,6 +75,7 @@ export function ChatComposer({
   attachments,
   onAttachmentsChange,
   compact = false,
+  creditTotal,
 }: ChatComposerProps) {
   const inputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -263,6 +265,7 @@ export function ChatComposer({
         </DropdownMenu>
 
         <div className="ml-auto flex min-w-0 items-center gap-1">
+          {typeof creditTotal === "number" && <span className="hidden text-xs text-muted-foreground sm:inline">{creditTotal.toLocaleString()} credits</span>}
           <ModelPicker value={model} onValueChange={onModelChange} compact />
           {active ? (
             <Tooltip>

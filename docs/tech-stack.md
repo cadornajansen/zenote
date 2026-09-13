@@ -1,5 +1,7 @@
 # Zenote V1 technology stack
 
+> Phase 7/8 update: PayMongo Hosted Checkout v2 restricted to QR Ph is the sole V1 payment rail. It is called with native server `fetch` and verified with Node `crypto`; no browser payment SDK or public payment key is used.
+
 ## 1. Overview
 
 Zenote is a commercial AI chat SaaS. This document locks its intended V1 infrastructure direction without authorizing implementation of unbuilt integrations. Keep the product focused on AI chat, multimodal input, model choice, streaming, history, authentication, usage limits, subscriptions, PHP pricing, and Philippine-friendly payments.

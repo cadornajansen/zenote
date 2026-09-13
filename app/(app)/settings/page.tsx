@@ -2,12 +2,23 @@ import type { Metadata } from "next"
 
 import { AppSidebarTrigger } from "@/components/app-sidebar-trigger"
 import { ThemePreference } from "@/components/theme-preference"
+import { CreditsPanel } from "@/components/credits-panel"
 import { getCurrentUser } from "@/lib/auth"
+import { getCreditSummary, listRecentCreditActivity } from "@/lib/usage"
+import { CREDIT_PACKS, PAYG_AMOUNTS_CENTAVOS, modelCreditRates, resolvePurchaseOffer } from "@/lib/pricing"
 
 export const metadata: Metadata = { title: "Settings" }
 
 export default async function SettingsPage() {
   const user = await getCurrentUser()
+  const [summary, activity] = user ? await Promise.all([getCreditSummary(user.$id), listRecentCreditActivity(user.$id)]) : [null, null]
+  const creditCatalog = {
+    payg: PAYG_AMOUNTS_CENTAVOS.map((amountPhpCentavos) => ({
+      ...resolvePurchaseOffer({ type: "payg", amountPhpCentavos }),
+    })),
+    packs: CREDIT_PACKS.map((pack) => ({ ...pack })),
+    modelRates: modelCreditRates().map(({ id, name, credits }) => ({ id, name, credits })),
+  }
 
   return (
     <div className="h-full overflow-y-auto bg-background">
@@ -36,6 +47,7 @@ export default async function SettingsPage() {
             <ThemePreference />
           </div>
         </div>
+        {summary && activity && <CreditsPanel summary={summary} activity={activity} catalog={creditCatalog} />}
       </section>
     </div>
   )

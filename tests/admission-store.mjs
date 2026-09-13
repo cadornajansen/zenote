@@ -58,6 +58,25 @@ export function admissionStore() {
       if (row[p.column] - p.value < p.min) throw new Error("underflow")
       return write(p, { ...row, [p.column]: row[p.column] - p.value })
     },
+    listRows: async (p) => {
+      const source = new Map(rows)
+      if (p.transactionId) {
+        for (const [id, row] of transactions.get(p.transactionId).writes)
+          source.set(id, row)
+      }
+      let result = [...source.entries()]
+        .filter(([id]) => id.startsWith(`${p.tableId}/`))
+        .map(([, row]) => structuredClone(row))
+      for (const encoded of p.queries || []) {
+        const query = JSON.parse(encoded)
+        if (query.method === "equal")
+          result = result.filter((row) => query.values.includes(row[query.attribute]))
+        if (query.method === "lessThanEqual")
+          result = result.filter((row) => row[query.attribute] <= query.values[0])
+        if (query.method === "limit") result = result.slice(0, query.values[0])
+      }
+      return { rows: result, total: result.length }
+    },
   }
   return { tablesDB, rows, counters: () => [...rows.values()].filter((row) => row.window && row.window !== "lease"), leases: () => [...rows.values()].filter((row) => row.window === "lease") }
 }

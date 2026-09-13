@@ -1,5 +1,7 @@
 # Zenote product context
 
+> Phase 7/8 update: V1 billing is Free plus prepaid Zenote Credits purchased through PayMongo QR Ph. It has no subscriptions, recurring billing, cards, renewals, proration, or automatic overage billing. Credits are non-transferable service credits with no cash value; purchased credits do not expire in V1, while free credits replenish monthly and are spent first.
+
 ## Overview
 
 Zenote is a commercial AI chat SaaS: **Powerful AI, without the tight limits.** It gives people a polished, familiar place to chat with strong AI models, with multimodal input where a model supports it.

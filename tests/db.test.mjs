@@ -386,6 +386,11 @@ test("provisioning is repeatable, restrictive, non-destructive and seeded from t
     [...tables.keys()],
     [
       "usage_counters",
+      "credit_accounts",
+      "credit_transactions",
+      "credit_reservations",
+      "usage_events",
+      "purchases",
       "users",
       "conversations",
       "messages",
@@ -403,7 +408,7 @@ test("provisioning is repeatable, restrictive, non-destructive and seeded from t
     assert.equal(table.rowSecurity, name !== "models")
     assert.deepEqual(
       table.$permissions,
-      ["users", "attachments", "usage_counters", "user_crypto_keys"].includes(name)
+      ["users", "attachments", "usage_counters", "user_crypto_keys", "credit_accounts", "credit_transactions", "credit_reservations", "usage_events", "purchases"].includes(name)
         ? []
         : [name === "models" ? 'read("users")' : 'create("users")']
     )

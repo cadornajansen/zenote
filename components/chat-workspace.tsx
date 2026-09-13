@@ -87,6 +87,9 @@ function ChatSession({
   const controllerRef = useRef<AbortController | null>(null)
   const hasConversation = messages.length > 0
   const [error, setError] = useState<string>()
+  const [creditTotal, setCreditTotal] = useState<number>()
+
+  useEffect(() => { void fetch("/api/credits").then((response) => response.ok ? response.json() : null).then((data) => { if (typeof data?.totalCredits === "number") setCreditTotal(data.totalCredits) }).catch(() => {}) }, [])
 
   useEffect(
     () => () => {
@@ -374,6 +377,7 @@ function ChatSession({
           updateAssistant(assistantId, { content, status: "streaming" })
         },
       })
+      void fetch("/api/credits").then((response) => response.ok ? response.json() : null).then((data) => { if (typeof data?.totalCredits === "number") setCreditTotal(data.totalCredits) }).catch(() => {})
     } catch (error) {
       if (!persisted) {
         setMessages((current) =>
@@ -525,6 +529,7 @@ function ChatSession({
           onModelChange={changeModel}
           attachments={attachments}
           onAttachmentsChange={setAttachments}
+          creditTotal={creditTotal}
         />
       ) : (
         <EmptyChat
@@ -537,6 +542,7 @@ function ChatSession({
           onModelChange={changeModel}
           attachments={attachments}
           onAttachmentsChange={setAttachments}
+          creditTotal={creditTotal}
         />
       )}
     </div>
@@ -553,6 +559,7 @@ type ComposerStateProps = {
   onModelChange: (model: string) => void
   attachments: MockAttachment[]
   onAttachmentsChange: (attachments: MockAttachment[]) => void
+  creditTotal?: number
 }
 
 function EmptyChat(props: ComposerStateProps) {

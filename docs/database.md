@@ -1,5 +1,7 @@
 # Zenote database
 
+> Phase 7/8 update: `credit_accounts` caches separate free and purchased balances; immutable `credit_transactions` provide audit history; `credit_reservations` prevent concurrent overspend; `usage_events` hold telemetry without any content; and `purchases` holds server-created PayMongo checkout identifiers and idempotency data. These are server-only, row-secure tables. `usage_counters` remains unchanged.
+
 Phases 2 and 3 implement `users`, `conversations`, `messages`, `user_preferences`, `models`, and `attachments` in Appwrite TablesDB, plus a private attachments Storage bucket. The remaining tables below are planned only. Appwrite Auth owns identity, passwords, OAuth, and sessions; none of those credentials are duplicated in TablesDB.
 
 ## Provisioning

@@ -48,6 +48,63 @@ export const schema = {
     ],
     indexes: [index("windowStart", ["windowStart"])],
   },
+  credit_accounts: {
+    columns: [
+      varchar("userId", 36),
+      column("freeCredits", "integer", true, { min: 0, max: Number.MAX_SAFE_INTEGER }),
+      column("purchasedCredits", "integer", true, { min: 0, max: Number.MAX_SAFE_INTEGER }),
+      varchar("freeGrantPeriod", 7),
+    ],
+    indexes: [index("userId", ["userId"], "unique")],
+  },
+  credit_transactions: {
+    columns: [
+      varchar("userId", 36),
+      column("type", "enum", true, { elements: ["free_monthly_grant", "purchase", "chat_usage", "adjustment", "refund"] }),
+      column("amount", "integer", true, { min: -Number.MAX_SAFE_INTEGER, max: Number.MAX_SAFE_INTEGER }),
+      column("bucket", "enum", true, { elements: ["free", "purchased"] }),
+      column("balanceAfter", "integer", true, { min: 0, max: Number.MAX_SAFE_INTEGER }),
+      varchar("referenceType", 32),
+      varchar("referenceId", 64),
+      varchar("idempotencyKey", 128),
+      column("metadataJson", "text", false),
+    ],
+    indexes: [index("userId_createdAt", ["userId", "$createdAt"], "key", ["ASC", "DESC"]), index("idempotencyKey", ["idempotencyKey"], "unique"), index("referenceId", ["referenceId"])],
+  },
+  credit_reservations: {
+    columns: [
+      varchar("userId", 36),
+      varchar("requestedModel", 64),
+      column("reservedCredits", "integer", true, { min: 1, max: 100 }),
+      column("reservedFreeCredits", "integer", true, { min: 0, max: 100 }),
+      column("reservedPurchasedCredits", "integer", true, { min: 0, max: 100 }),
+      varchar("freeGrantPeriod", 7),
+      column("status", "enum", true, { elements: ["reserved", "settled", "released"] }),
+      column("expiresAt", "datetime"),
+    ],
+    indexes: [
+      index("userId_status", ["userId", "status"]),
+      index("userId_status_expiresAt", ["userId", "status", "expiresAt"]),
+      index("expiresAt", ["expiresAt"]),
+    ],
+  },
+  usage_events: {
+    columns: [
+      varchar("userId", 36), varchar("conversationId", 36, false), varchar("messageId", 36, false),
+      column("operation", "enum", true, { elements: ["chat", "attachment_image", "attachment_pdf", "attachment_audio", "attachment_document"] }),
+      varchar("requestedModel", 64, false), varchar("actualModel", 64, false), varchar("provider", 64),
+      column("fallbackUsed", "boolean"), column("inputTokens", "integer", false, { min: 0 }), column("outputTokens", "integer", false, { min: 0 }), column("cachedInputTokens", "integer", false, { min: 0 }), column("totalTokens", "integer", false, { min: 0 }),
+      column("latencyMs", "integer", true, { min: 0 }), column("status", "enum", true, { elements: ["success", "failed", "aborted"] }), column("creditsCharged", "integer", true, { min: 0 }), column("estimatedProviderCostMicrousd", "integer", false, { min: 0 }), varchar("providerRequestId", 128, false), varchar("errorType", 64, false),
+    ],
+    indexes: [index("userId_createdAt", ["userId", "$createdAt"], "key", ["ASC", "DESC"]), index("conversationId", ["conversationId"]), index("status", ["status"])],
+  },
+  purchases: {
+    columns: [
+      varchar("userId", 36), varchar("paymongoResourceId", 64), varchar("paymongoPaymentIntentId", 64, false), varchar("paymongoPaymentId", 64, false),
+      column("type", "enum", true, { elements: ["payg", "starter", "power", "max"] }), column("amountPhpCentavos", "integer", true, { min: 1 }), column("credits", "integer", true, { min: 1 }), column("status", "enum", true, { elements: ["pending", "paid", "expired", "failed", "refunded"] }), varchar("idempotencyKey", 128), column("paidAt", "datetime", false),
+    ],
+    indexes: [index("userId_createdAt", ["userId", "$createdAt"], "key", ["ASC", "DESC"]), index("paymongoResourceId", ["paymongoResourceId"], "unique"), index("status", ["status"]), index("idempotencyKey", ["idempotencyKey"], "unique")],
+  },
   users: {
     columns: [
       varchar("displayName", 128),
@@ -206,7 +263,7 @@ export async function provision(tablesDB, databaseId, seed = true) {
     const permissions =
       tableId === "models"
         ? [Permission.read(Role.users())]
-          : ["users", "attachments", "usage_counters", "user_crypto_keys"].includes(tableId)
+          : ["users", "attachments", "usage_counters", "user_crypto_keys", "credit_accounts", "credit_transactions", "credit_reservations", "usage_events", "purchases"].includes(tableId)
           ? []
           : [Permission.create(Role.users())]
     const rowSecurity = tableId !== "models"

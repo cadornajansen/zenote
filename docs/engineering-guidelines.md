@@ -1,5 +1,7 @@
 # Zenote engineering guidelines
 
+> Phase 7/8 update: use integers for credits, tokens, micro-USD, and centavos. Credits are service units, not money. Charge a successfully persisted chat by its actual gateway model, consume free credit first, and meter attachments at zero credits in V1. Ledger entries are immutable and every balance mutation shares a transaction with its ledger row.
+
 - Use TypeScript first and preserve strict type safety.
 - Inspect existing patterns before introducing structures or dependencies.
 - Preserve working behavior through small, focused, maintainable changes.

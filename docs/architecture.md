@@ -1,5 +1,7 @@
 # Zenote architecture
 
+> Phase 7/8 update: `lib/usage.ts` owns durable usage events, separate free/purchased balances, immutable ledger rows, and atomic reservations. It is independent from Phase 4 `usage_counters`, which only controls admission. `lib/billing.ts` owns server-only PayMongo QR Ph hosted checkout and signed webhook fulfillment.
+
 ## Current repository
 
 Zenote is a Next.js 16.2.6 App Router project using pnpm, TypeScript, Tailwind CSS 4, and shadcn/ui (Base Nova). The public site, Appwrite authentication, and authenticated chat interface are implemented. Authentication uses Appwrite Account APIs, server actions, an HTTP-only session cookie, and server-enforced protected layouts. Chat uses real AssemblyAI LLM Gateway streaming through authenticated `POST /api/chat`. Phase 2 persists users, conversations, messages, user preferences, and a mirror of the model registry in Appwrite TablesDB. Phase 3 adds private Appwrite attachments and cached document/image/audio preprocessing. Durable usage accounting and billing remain planned.

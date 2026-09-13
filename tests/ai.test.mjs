@@ -19,6 +19,8 @@ let saveSignal
 let missingPrompt = false
 let attachmentContext = []
 let attachmentError
+let creditSettlements = []
+globalThis.__chatCreditSettle = (input) => creditSettlements.push(input)
 globalThis.__chatAttachments = () => {
   if (attachmentError) throw attachmentError
   return attachmentContext
@@ -58,6 +60,11 @@ registerHooks({
     if (specifier === "@/lib/attachments")
       return {
         url: "data:text/javascript,export const loadAttachmentContext=async()=>globalThis.__chatAttachments()",
+        shortCircuit: true,
+      }
+    if (specifier === "@/lib/usage")
+      return {
+        url: "data:text/javascript,export class InsufficientCreditsError extends Error{constructor(){super('insufficient');this.code='insufficient_credits';this.status=402}}; export const reserveChatCredits=async(_user,_model,id)=>({$id:id}); export const settleChatCredits=async(input)=>globalThis.__chatCreditSettle(input)",
         shortCircuit: true,
       }
     if (specifier.startsWith("@/"))
@@ -113,6 +120,7 @@ afterEach(() => {
   missingPrompt = false
   attachmentContext = []
   attachmentError = undefined
+  creditSettlements = []
   if (originalKey === undefined) delete process.env.ASSEMBLYAI_API_KEY
   else process.env.ASSEMBLYAI_API_KEY = originalKey
   if (originalBase === undefined) delete process.env.ASSEMBLYAI_LLM_BASE_URL
@@ -550,6 +558,7 @@ test("route streams normalized events and logs no prompt/key", async () => {
   const chatLog = logs.find((log) => log.event === "chat.request")
   assert.equal(chatLog.status, "complete")
   assert.equal(chatLog.actualModel, "gpt-5.6-luna")
+  assert.equal(creditSettlements[0].actualModel, "gpt-5-6-luna")
   assert.doesNotMatch(JSON.stringify(logs), /Hello|test-key-not-a-secret/)
   assert.deepEqual(savedMessages, [
     {

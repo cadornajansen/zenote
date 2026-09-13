@@ -13,8 +13,15 @@ import { loadAttachmentContext } from "@/lib/attachments"
 import { AttachmentError } from "@/lib/attachment-policy"
 import { admit, AdmissionError, releaseAdmission, type Admission } from "@/lib/admission"
 import { isAppwriteId, isSameOriginRequest } from "@/lib/request-security"
+import { InsufficientCreditsError, reserveChatCredits, settleChatCredits } from "@/lib/usage"
+import { getModel, getModelByProviderId } from "@/lib/models"
 
 export const runtime = "nodejs"
+
+function actualZenoteModel(rawModel: string | undefined, requestedModel: string) {
+  if (!rawModel) return requestedModel
+  return getModel(rawModel)?.id ?? getModelByProviderId(rawModel)?.id ?? requestedModel
+}
 
 function retryablePersistenceError(error: unknown) {
   const code =
@@ -54,6 +61,8 @@ async function saveAssistantResponse(
 
 export async function POST(request: Request) {
   let admission: Admission | undefined
+  let creditReservationId: string | undefined
+  let creditContext: { userId: string; conversationId: string; messageId: string; requestedModel: string } | undefined
   const release = async () => {
     if (!admission) return
     const receipt = admission
@@ -168,18 +177,22 @@ export async function POST(request: Request) {
     )
     signal.throwIfAborted()
     admission = await admit(user.$id, "chat_request")
+    const reservation = await reserveChatCredits(user.$id, input.model, telemetry.requestId)
+    creditReservationId = reservation.$id
+    creditContext = { userId: user.$id, conversationId, messageId, requestedModel: input.model }
     const events = await streamChat(input, signal, telemetry, attachments)
     const encoder = new TextEncoder()
     let cancelled = false
     const stream = new ReadableStream<Uint8Array>({
       async start(output) {
+        let completed = false
+        let content = ""
         const emit = (event: ChatEvent) => {
           if (!cancelled)
             output.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`))
         }
         try {
           emit({ type: "metadata", requestId: telemetry.requestId })
-          let content = ""
           for await (const event of events) {
             if (event.type === "delta") content += event.text
             emit(event)
@@ -202,12 +215,57 @@ export async function POST(request: Request) {
             )
           }
           telemetry.status = "complete"
+          const actualModel = actualZenoteModel(telemetry.actualModel, input.model)
+          await settleChatCredits({
+            reservationId: creditReservationId!,
+            actualModel,
+            usage: {
+              conversationId,
+              messageId,
+              requestedModel: input.model,
+              provider: "assemblyai",
+              fallbackUsed: actualModel !== input.model,
+              inputTokens: telemetry.inputTokens,
+              outputTokens: telemetry.outputTokens,
+              cachedInputTokens: telemetry.cachedTokens,
+              totalTokens: telemetry.inputTokens === undefined || telemetry.outputTokens === undefined ? undefined : telemetry.inputTokens + telemetry.outputTokens,
+              latencyMs: Date.now() - started,
+              status: "success",
+              providerRequestId: telemetry.requestId,
+            },
+          })
+          completed = true
           emit({ type: "done" })
         } catch (error) {
           telemetry.status =
             request.signal.aborted || cancelled ? "aborted" : "error"
           emit({ type: "error", message: safeChatError(error).message })
         } finally {
+          if (creditReservationId && !completed) {
+            const actualModel = actualZenoteModel(telemetry.actualModel, input.model)
+            const materiallyStarted = content.trim().length > 0 ||
+              (telemetry.outputTokens !== undefined && telemetry.outputTokens > 0)
+            await settleChatCredits({
+              reservationId: creditReservationId,
+              actualModel,
+              charge: materiallyStarted,
+              usage: {
+                conversationId,
+                messageId,
+                requestedModel: input.model,
+                provider: "assemblyai",
+                fallbackUsed: actualModel !== input.model,
+                inputTokens: telemetry.inputTokens,
+                outputTokens: telemetry.outputTokens,
+                cachedInputTokens: telemetry.cachedTokens,
+                totalTokens: telemetry.inputTokens === undefined || telemetry.outputTokens === undefined ? undefined : telemetry.inputTokens + telemetry.outputTokens,
+                latencyMs: Date.now() - started,
+                status: telemetry.status === "aborted" ? "aborted" : "failed",
+                providerRequestId: telemetry.requestId,
+                errorType: telemetry.status,
+              },
+            }).catch(() => {})
+          }
           controller.abort()
           await release()
           log()
@@ -229,14 +287,36 @@ export async function POST(request: Request) {
     })
   } catch (error) {
     controller.abort()
+    if (creditReservationId && creditContext) {
+      const actualModel = actualZenoteModel(telemetry.actualModel, creditContext.requestedModel)
+      await settleChatCredits({
+        reservationId: creditReservationId,
+        actualModel,
+        usage: {
+          conversationId: creditContext.conversationId,
+          messageId: creditContext.messageId,
+          requestedModel: creditContext.requestedModel,
+          provider: "assemblyai",
+          fallbackUsed: actualModel !== creditContext.requestedModel,
+          inputTokens: telemetry.inputTokens,
+          outputTokens: telemetry.outputTokens,
+          cachedInputTokens: telemetry.cachedTokens,
+          latencyMs: Date.now() - started,
+          status: request.signal.aborted ? "aborted" : "failed",
+          providerRequestId: telemetry.requestId,
+          errorType: "before_stream",
+        },
+      }).catch(() => {})
+    }
     await release()
     if (request.signal.aborted) telemetry.status = "aborted"
     log()
-    const safe = error instanceof AttachmentError || error instanceof AdmissionError ? error : safeChatError(error)
+    const safe = error instanceof AttachmentError || error instanceof AdmissionError || error instanceof InsufficientCreditsError ? error : safeChatError(error)
     return Response.json(
       {
         error: safe.message,
-        ...(error instanceof AttachmentError || error instanceof AdmissionError ? { code: error.code } : {}),
+        ...(error instanceof AttachmentError || error instanceof AdmissionError || error instanceof InsufficientCreditsError ? { code: error.code } : {}),
+        ...(error instanceof InsufficientCreditsError ? { requiredCredits: error.requiredCredits, availableCredits: error.availableCredits, modelId: error.modelId } : {}),
         ...(error instanceof AdmissionError && error.retryAfter ? { retryAfter: error.retryAfter } : {}),
         requestId: telemetry.requestId,
       },

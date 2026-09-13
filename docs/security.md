@@ -1,5 +1,7 @@
 # Production security boundary
 
+> Phase 7/8 update: PayMongo secrets remain server-only. Checkout clients send a package choice only; the server resolves price and credits. Only a raw-body HMAC-verified `checkout_session.payment.paid` webhook can grant credits. PayMongo's `t` value remains part of the signed `t.rawBody` input, but no freshness cutoff rejects legitimate delayed retries. Credit grants and paid purchases are idempotent; billing and usage records never store chat or attachment content.
+
 This document records Zenote's implemented Phase 5 and Phase 6 controls. It is not a
 generic security checklist.
 
