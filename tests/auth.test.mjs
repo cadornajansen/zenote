@@ -41,7 +41,7 @@ registerHooks({
           export const APPWRITE_SESSION_COOKIE="zenote-session";
           export const createAdminServerClient=()=>globalThis.__authAdmin();
           export const createSessionClient=async()=>globalThis.__authSession();
-          export const isTrustedAppwriteOAuthUrl=(value)=>{try{return new URL(value).origin==="https://sgp.cloud.appwrite.io"}catch{return false}}`,
+          export const isTrustedOAuthAuthorizationUrl=(value,provider)=>{try{const url=new URL(value);return url.protocol==="https:"&&provider==="google"&&url.hostname==="accounts.google.com"}catch{return false}}`,
         shortCircuit: true,
       }
     if (specifier.startsWith("@/"))
@@ -85,7 +85,7 @@ beforeEach(() => {
     create: async () => ({ $id: "owner" }),
     createEmailPasswordSession: async () => session,
     createOAuth2Token: async () =>
-      "https://sgp.cloud.appwrite.io/v1/account/tokens/oauth2/google",
+      "https://accounts.google.com/o/oauth2/v2/auth",
     createSession: async () => session,
     createRecovery: async () => ({ $id: "token" }),
     updateRecovery: async () => ({ $id: "token" }),
@@ -191,17 +191,23 @@ test("OAuth success uses fixed trusted redirects and rejects untrusted authoriza
   assert.equal(response.headers.get("location"), "https://zenote.example/chat")
   assert.equal(cookieCalls.length, 1)
 
-  account.createOAuth2Token = async () => "https://evil.example/authorize"
-  await assert.rejects(auth.signInWithGoogle(), /untrusted OAuth URL/)
+  for (const value of [
+    "http://accounts.google.com/o/oauth2/auth",
+    "https://evil.example/authorize",
+    "https://accounts.google.com.evil.example/o/oauth2/auth",
+  ]) {
+    account.createOAuth2Token = async () => value
+    await assert.rejects(auth.signInWithGoogle(), /untrusted OAuth URL/)
+  }
 })
 
 test("OAuth initiation uses fixed Appwrite callbacks and sign-up stores no cookie on failure", async () => {
   let oauthOptions
   account.createOAuth2Token = async (options) => {
     oauthOptions = options
-    return "https://sgp.cloud.appwrite.io/v1/account/tokens/oauth2/google"
+    return "https://accounts.google.com/o/oauth2/v2/auth"
   }
-  assert.match(await auth.signInWithGoogle(), /^https:\/\/sgp\.cloud\.appwrite\.io/)
+  assert.match(await auth.signInWithGoogle(), /^https:\/\/accounts\.google\.com/)
   assert.equal(oauthOptions.provider, "google")
   assert.equal(
     oauthOptions.success,

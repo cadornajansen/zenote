@@ -12,7 +12,7 @@ import {
   APPWRITE_SESSION_COOKIE,
   createAdminServerClient,
   createSessionClient,
-  isTrustedAppwriteOAuthUrl,
+  isTrustedOAuthAuthorizationUrl,
 } from "@/lib/appwrite-server"
 
 export type AuthUser = Pick<
@@ -80,16 +80,8 @@ export async function signInWithGoogle() {
     success: applicationUrl("/auth/oauth/callback"),
     failure: applicationUrl("/login?error=oauth"),
   })
-  if (!isTrustedAppwriteOAuthUrl(authorizationUrl)) {
-    let host: string | undefined
-    try {
-      host = new URL(authorizationUrl).host
-    } catch {
-      host = "invalid"
-    }
-    console.error("Google OAuth authorization URL rejected", { host })
+  if (!isTrustedOAuthAuthorizationUrl(authorizationUrl, "google"))
     throw new Error("Appwrite returned an untrusted OAuth URL")
-  }
   return authorizationUrl
 }
 

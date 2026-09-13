@@ -13,11 +13,14 @@ const executionApiKey = process.env.APPWRITE_EXECUTION_API_KEY || apiKey
 
 export const APPWRITE_SESSION_COOKIE = "zenote-session"
 
-export function isTrustedAppwriteOAuthUrl(value: string) {
+export function isTrustedOAuthAuthorizationUrl(
+  value: string,
+  provider: "google"
+) {
   try {
     const url = new URL(value)
-    const trusted = new URL(endpoint)
-    return url.origin === trusted.origin && url.protocol === trusted.protocol
+    return url.protocol === "https:" &&
+      (provider !== "google" || url.hostname === "accounts.google.com")
   } catch {
     return false
   }
