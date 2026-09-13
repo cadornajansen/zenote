@@ -7,6 +7,7 @@ import {
   ArchiveIcon,
   ChevronUpIcon,
   CircleHelpIcon,
+  CoinsIcon,
   LogOutIcon,
   MessageSquareIcon,
   MoreHorizontalIcon,
@@ -372,6 +373,14 @@ export function AppSidebar({
         <SidebarFooter className="gap-0.5 px-2 py-2">
           <SidebarMenu>
             <SidebarMenuItem>
+              <SidebarMenuButton tooltip="Credits" render={<Link href="/settings" />}>
+                <CoinsIcon />
+                <span className="group-data-[collapsible=icon]:hidden">
+                  Credits
+                </span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+            <SidebarMenuItem>
               <SidebarMenuButton tooltip="Settings" onClick={openSettings}>
                 <SettingsIcon />
                 <span className="group-data-[collapsible=icon]:hidden">
@@ -384,10 +393,10 @@ export function AppSidebar({
           <div className="mx-1 my-2 rounded-lg bg-sidebar-accent/55 px-2.5 py-2.5 group-data-[collapsible=icon]:hidden">
             <p className="text-xs font-medium">Free plan</p>
             <Link
-              href="/pricing"
+              href="/settings"
               className="mt-1 block text-xs text-sidebar-foreground/55 hover:text-sidebar-foreground"
             >
-              View plans
+              Add credits
             </Link>
           </div>
 
@@ -424,6 +433,9 @@ export function AppSidebar({
                 </DropdownMenuLabel>
               </DropdownMenuGroup>
               <DropdownMenuSeparator />
+              <DropdownMenuItem render={<Link href="/settings" />}>
+                <CoinsIcon /> Credits
+              </DropdownMenuItem>
               <DropdownMenuItem onClick={openSettings}>
                 <SettingsIcon /> Settings
               </DropdownMenuItem>

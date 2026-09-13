@@ -1,5 +1,6 @@
 "use client"
 
+import Link from "next/link"
 import { useLayoutEffect, useRef, useState } from "react"
 import {
   ArrowUpIcon,
@@ -265,7 +266,14 @@ export function ChatComposer({
         </DropdownMenu>
 
         <div className="ml-auto flex min-w-0 items-center gap-1">
-          {typeof creditTotal === "number" && <span className="hidden text-xs text-muted-foreground sm:inline">{creditTotal.toLocaleString()} credits</span>}
+          {typeof creditTotal === "number" && (
+            <Link
+              href="/settings"
+              className="hidden text-xs text-muted-foreground transition-colors hover:text-foreground sm:inline"
+            >
+              {creditTotal.toLocaleString()} credits
+            </Link>
+          )}
           <ModelPicker value={model} onValueChange={onModelChange} compact />
           {active ? (
             <Tooltip>
