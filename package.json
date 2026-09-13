@@ -5,7 +5,8 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "npm --prefix functions/attachment-processor run build && next build",
+    "build": "next build",
+    "build:function": "npm --prefix functions/attachment-processor run build",
     "start": "next start",
     "lint": "eslint",
     "format": "prettier --write \"**/*.{ts,tsx}\"",
