@@ -36,6 +36,18 @@ const index = (key, columns, type = "key", orders) => ({
 })
 
 export const schema = {
+  usage_counters: {
+    columns: [
+      column("scope", "enum", true, { elements: ["user", "global"] }),
+      varchar("subjectId", 36),
+      column("resource", "enum", true, { elements: ["chat_request", "attachment_job", "attachment_bytes"] }),
+      column("window", "enum", true, { elements: ["minute", "day", "lease"] }),
+      column("windowStart", "datetime"),
+      column("count", "integer", true, { min: 0, max: Number.MAX_SAFE_INTEGER }),
+      column("leases", "text", false),
+    ],
+    indexes: [index("windowStart", ["windowStart"])],
+  },
   users: {
     columns: [
       varchar("displayName", 128),
@@ -50,7 +62,8 @@ export const schema = {
   conversations: {
     columns: [
       varchar("userId", 36),
-      varchar("title", 120),
+      // A 120-character title expands to about 220 characters in a zenc envelope.
+      varchar("title", 1024),
       varchar("modelId", 64),
       column("systemPrompt", "text", false),
       column("isPinned", "boolean", false, { xdefault: false }),
@@ -98,6 +111,16 @@ export const schema = {
       column("customInstructions", "text", false),
     ],
     indexes: [index("userId", ["userId"], "unique")],
+  },
+  user_crypto_keys: {
+    columns: [
+      varchar("userId", 36),
+      column("keyVersion", "integer", true, { min: 1 }),
+      column("wrappedDek", "text"),
+      varchar("kmsKeyArn", 2048),
+      varchar("algorithm", 32),
+    ],
+    indexes: [],
   },
   attachments: {
     columns: [
@@ -183,7 +206,7 @@ export async function provision(tablesDB, databaseId, seed = true) {
     const permissions =
       tableId === "models"
         ? [Permission.read(Role.users())]
-        : ["users", "attachments"].includes(tableId)
+          : ["users", "attachments", "usage_counters", "user_crypto_keys"].includes(tableId)
           ? []
           : [Permission.create(Role.users())]
     const rowSecurity = tableId !== "models"
@@ -219,7 +242,26 @@ export async function provision(tablesDB, databaseId, seed = true) {
         (actualType === "string" &&
           ["text", "longtext"].includes(type) &&
           actual.size >= (type === "longtext" ? 4_294_967_295 : 65_535))
-      if (
+      const needsVarcharExpansion =
+        tableId === "conversations" &&
+        spec.key === "title" &&
+        type === "varchar" &&
+        compatibleType &&
+        actual.size < spec.size
+      if (needsVarcharExpansion) {
+        await tablesDB.updateVarcharColumn({
+          ...base,
+          key: spec.key,
+          required: spec.required,
+          size: spec.size,
+          // TablesDB requires this field on updates; required columns cannot have a default.
+          xdefault: spec.xdefault ?? null,
+        })
+        await available(
+          () => tablesDB.getColumn({ ...base, key: spec.key }),
+          `${tableId}.${spec.key}`
+        )
+      } else if (
         !compatibleType ||
         actual.required !== spec.required ||
         (spec.size !== undefined && actual.size !== spec.size) ||
@@ -387,19 +429,24 @@ if (
   import.meta.url === pathToFileURL(process.argv[1]).href
 ) {
   try {
+    const provisioningKey =
+      process.env.APPWRITE_PROVISIONING_API_KEY || process.env.APPWRITE_API_KEY
     for (const key of [
       "NEXT_PUBLIC_APPWRITE_ENDPOINT",
       "NEXT_PUBLIC_APPWRITE_PROJECT_ID",
-      "APPWRITE_API_KEY",
       "APPWRITE_DATABASE_ID",
       "APPWRITE_STORAGE_BUCKET_ID",
     ]) {
       if (!process.env[key]) throw new Error(`Missing ${key}`)
     }
+    if (!provisioningKey)
+      throw new Error(
+        "Missing APPWRITE_PROVISIONING_API_KEY or APPWRITE_API_KEY"
+      )
     const client = new Client()
       .setEndpoint(process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT)
       .setProject(process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID)
-      .setKey(process.env.APPWRITE_API_KEY)
+      .setKey(provisioningKey)
     await provision(
       new TablesDB(client),
       process.env.APPWRITE_DATABASE_ID,

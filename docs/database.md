@@ -10,11 +10,11 @@ Use Node.js 22.18+ (Node.js 24 recommended) and the existing pnpm installation:
 pnpm setup:appwrite
 ```
 
-`scripts/setup-appwrite.mjs` loads `.env.local` when present. Set `NEXT_PUBLIC_APPWRITE_ENDPOINT`, `NEXT_PUBLIC_APPWRITE_PROJECT_ID`, `APPWRITE_DATABASE_ID`, `APPWRITE_STORAGE_BUCKET_ID`, and the server-only `APPWRITE_API_KEY`. Create the database explicitly in Appwrite first; setup will not silently create a database under a mistyped ID. The dedicated Storage bucket is created if missing.
+`scripts/setup-appwrite.mjs` loads `.env.local` when present. Set `NEXT_PUBLIC_APPWRITE_ENDPOINT`, `NEXT_PUBLIC_APPWRITE_PROJECT_ID`, `APPWRITE_DATABASE_ID`, `APPWRITE_STORAGE_BUCKET_ID`, and the setup-only `APPWRITE_PROVISIONING_API_KEY` (the script accepts `APPWRITE_API_KEY` as a local compatibility fallback). Create the database explicitly in Appwrite first; setup will not silently create a database under a mistyped ID. The dedicated Storage bucket is created if missing.
 
-The provisioning key needs `databases.read`, `tables.read/write`, `columns.read/write`, `indexes.read/write`, `rows.read/write`, `buckets.read/write`, and `functions.read/write`. The Site runtime key needs `sessions.write`, `rows.read/write`, `files.read/write`, and `executions.write`. Normal chat/preference/profile reads use the session. Attachment reads first prove session access and ownership; only then may lifecycle mutations use the server key. Setup also provisions Function settings from `appwrite.config.json`; the official CLI deploys its code separately. The Function uses only its dynamic `x-appwrite-key` with `rows.read`, `rows.write`, `files.read`; it has no permanent admin key or client execute permission.
+The provisioning key needs `databases.read`, `tables.read/write`, `columns.read/write`, `indexes.read/write`, `rows.read/write`, `buckets.read/write`, and `functions.read/write`. The Site runtime data key needs `sessions.write`, `rows.read/write`, and `files.write`; the recommended execution key needs only `executions.write`. Normal chat/preference/profile and attachment file reads use the session. Attachment reads first prove session access and ownership; only then may lifecycle mutations use a server key. Setup also provisions Function settings from `appwrite.config.json`; the official CLI deploys its code separately. The Function uses only its dynamic `x-appwrite-key` with `rows.read`, `rows.write`, `files.read`; it has no permanent admin key or client execute permission.
 
-Setup creates missing tables, columns, and indexes, waits for their availability, reconciles table permissions and existing profile row ACLs, and upserts the current registry models. Repeated runs are safe. It never deletes rows, tables, columns, or indexes. Incompatible existing columns/indexes cause an explicit failure requiring manual reconciliation, not destructive migration. Removed registry models are not automatically deleted; runtime routing still uses the code registry. `pnpm setup:appwrite --no-seed` skips model upserts.
+Setup creates missing tables, columns, and indexes, waits for their availability, reconciles table permissions and existing profile row ACLs, and upserts the current registry models. It safely expands the existing conversation title varchar to 1024 characters for encrypted envelopes. Repeated runs are safe. It never deletes rows, tables, columns, or indexes. Other incompatible existing columns/indexes cause an explicit failure requiring manual reconciliation, not destructive migration. Removed registry models are not automatically deleted; runtime routing still uses the code registry. `pnpm setup:appwrite --no-seed` skips model upserts.
 
 ## Ownership And Permissions
 
@@ -23,6 +23,7 @@ Setup creates missing tables, columns, and indexes, waits for their availability
 - `users` enables row security with no table-wide permissions and grants only owner read per row. `ensureUser` first reads with the session, then uses a narrow trusted-server creation path only if the profile is missing: Auth `$id`, Auth display name, `role: user`, owner-read-only ACL. Client profile writes are deliberately unavailable because Appwrite row permissions cannot protect the `role` column independently or enforce an Auth-derived row ID. Setup hardens existing profile ACLs without changing profile data. The role field does not currently unlock any admin feature or entitlement.
 - `models` grants authenticated users table-level read only, with row security disabled and no client write permissions. Provisioning is its only writer. The UI continues to show Zenote model names, not infrastructure metadata.
 - `attachments` has row security and no table-wide grants. Rows and files grant only owner read. No client create/update/delete is allowed: otherwise an owner could forge processed text, provider status, file references, or another user's ownership. All writes use authenticated server endpoints with parent/message ownership checks. The dedicated bucket has `fileSecurity: true`, no bucket-wide grants, encryption/antivirus enabled, a 5 MB maximum and an extension allowlist. There are no public file URLs or tokens. Existing file/row ACLs must already be owner-read-only; inconsistent ACLs fail closed rather than being silently accepted.
+- `user_crypto_keys` has row security and no table-wide permissions. It is accessible only through server-side Appwrite credentials and stores wrapped DEKs, never plaintext DEKs. Its deterministic row ID is derived from Auth user ID and key version.
 - `userId` is a query filter and defense-in-depth check, never the primary authorization boundary. Conversation lookup returns the same not-found result for absent or inaccessible IDs. Message operations first authorize the parent conversation; row owner and parent IDs must also match. Session ACL enforcement still applies to direct Appwrite requests.
 
 ## Implemented Tables
@@ -35,7 +36,7 @@ All tables use Appwrite `$id`, `$createdAt`, and `$updatedAt`; no duplicate time
 
 ### `conversations` (implemented)
 
-Columns: `userId` varchar(36), `title` varchar(120), `modelId` varchar(64), nullable `systemPrompt` text, `isPinned` boolean default false, `isArchived` boolean default false, `isDeleting` boolean default false, nullable `lastMessageAt` datetime. The deletion tombstone blocks new application writes while paged cleanup runs and allows interrupted deletion to be retried.
+Columns: `userId` varchar(36), `title` varchar(1024), `modelId` varchar(64), nullable `systemPrompt` text, `isPinned` boolean default false, `isArchived` boolean default false, `isDeleting` boolean default false, nullable `lastMessageAt` datetime. The deletion tombstone blocks new application writes while paged cleanup runs and allows interrupted deletion to be retried.
 
 Indexes: `userId`; `userId + lastMessageAt` (ASC/DESC); `userId + isArchived`.
 
@@ -63,6 +64,22 @@ Columns: `userId` varchar(36), `conversationId` varchar(36), nullable `messageId
 
 Current uploads always reference a persisted owned user message; nullable `messageId` does not enable detached uploads. Metadata contains a content hash and processing lease, not arbitrary client data. A deterministic owner/message/slot ID bounds a message to four attachment slots and makes upload retries idempotent. Metadata is reserved transactionally with a parent check/touch before Storage upload so incomplete uploads remain discoverable. Failed uploads clean partial blobs; retry can reuse a completed blob or reclaim a stale partial upload. Storage and TablesDB are not one atomic transaction: a process crash during concurrent deletion/upload can still need operator reconciliation. No background cleanup service is introduced.
 
+### `user_crypto_keys` (implemented)
+
+Columns: `userId` varchar(36), `keyVersion` integer, `wrappedDek` text, `kmsKeyArn` varchar(2048), `algorithm` varchar(32). Each row holds one AWS KMS-wrapped AES-256 DEK for a user/version. No plaintext DEK, prompt, message, extracted attachment text, or encryption context is stored in this table.
+
+## Content Encryption Migration
+
+After `pnpm setup:appwrite`, migrate existing plaintext in a maintenance window using the configured administrative Appwrite key and KMS credentials:
+
+```sh
+pnpm migrate:content-encryption -- --dry-run
+pnpm migrate:content-encryption -- --apply
+pnpm migrate:content-encryption -- --verify
+```
+
+The migration is cursor-based, skips `zenc:` values, and is therefore resumable and idempotent. `--verify` fail-closes on plaintext, malformed envelopes, invalid tags, or AAD/key mismatches. Keep `ZENOTE_CRYPTO_ALLOW_LEGACY_PLAINTEXT=true` only for the controlled rollout window; set it to `false` after `--verify` succeeds.
+
 The Site transaction reserves `metadata.queued` before async enqueueing. Enqueue failure releases only its unclaimed reservation back to `uploaded` with `enqueue_failed`. The Function claims `metadata.lease` transactionally and only its matching lease/hash can finish. Fresh processing and ready rows are not enqueued twice. Explicit retries may reclaim processing after six minutes, longer than the Function's 300-second hard timeout; normal provider work has a two-minute cooperative deadline. Hard crashes need explicit retry, not polling-triggered replay. Ready cached text is reused without provider calls. Failures retain safe codes only. Delete removes the blob before the row; failed cleanup keeps the reference for retry. Conversation deletion tombstones the parent, removes all attachments/blobs in bounded batches, then messages and parent. Function claim/completion touches the parent transactionally so deletion conflicts rather than resurrecting rows. There is no TTL deletion of normal cached attachments.
 
 ## Chat Persistence Flow
@@ -80,7 +97,7 @@ UI history and prompt text are bounded (100 messages; 100,000 prompt characters)
 
 `pnpm test` exercises session-required access, owner checks, bounded ordering, transactional first sends and rollback, profile/preference synchronization, provisioning idempotence, and streaming completion/failure/abort boundaries with deterministic doubles. `pnpm lint`, `pnpm typecheck`, and `pnpm build` validate the application.
 
-For an opt-in live TablesDB smoke test after setup, run `node --env-file=.env.local tests/live-db.mjs`. It creates two disposable Auth users, tests real session-authorized persistence and cross-user denial, and cleans up only its own rows/users. Its temporary-user setup/cleanup additionally needs `users.write`; it makes no billable AI calls. Browser authentication, navigation, responsive rendering, and a real provider stream still require an authenticated browser smoke test.
+For an opt-in live TablesDB smoke test after setup, run `node --env-file=.env.local tests/live-db.mjs`. It uses `APPWRITE_PROVISIONING_API_KEY` (with `APPWRITE_API_KEY` retained only as a local compatibility fallback), creates two disposable Auth users, tests real session-authorized persistence and cross-user denial, and cleans up only its own rows/users. Its temporary-user setup/cleanup additionally needs `users.write`; it makes no billable AI calls. Browser authentication, navigation, responsive rendering, and a real provider stream still require an authenticated browser smoke test.
 
 ## Future Tables (planned, not implemented)
 

@@ -5,6 +5,7 @@ import { registerHooks } from "node:module"
 import { test, beforeEach } from "node:test"
 import { AppwriteException, Client, TablesDB } from "node-appwrite"
 import ts from "typescript"
+import { admissionStore } from "./admission-store.mjs"
 
 let client
 globalThis.__dbSession = () => client
@@ -22,7 +23,12 @@ registerHooks({
       return { url: "data:text/javascript,export {}", shortCircuit: true }
     if (specifier === "@/lib/appwrite-server")
       return {
-        url: "data:text/javascript,export const createSessionClient=async()=>globalThis.__dbSession(); export const createAdminServerClient=()=>globalThis.__dbAdmin()",
+        url: "data:text/javascript,export const createSessionClient=async()=>globalThis.__dbSession(); export const createAdminServerClient=()=>globalThis.__dbAdmin(); export const createExecutionServerClient=()=>globalThis.__dbAdmin()",
+        shortCircuit: true,
+      }
+    if (specifier === "@/lib/content-crypto")
+      return {
+        url: "data:text/javascript,export const encryptContent=async(_location,value)=>'zenc:'+value;export const decryptContent=async(_location,value)=>typeof value==='string'&&value.startsWith('zenc:')?value.slice(5):value",
         shortCircuit: true,
       }
     if (specifier.startsWith("@/"))
@@ -168,7 +174,8 @@ test("new conversation and first message share owner-only ACLs and commit atomic
   )
   const writes = calls.filter(([method]) => method === "create")
   assert.equal(writes.length, 2)
-  assert.equal(writes[0][1].data.title, "Hello world")
+  assert.equal(writes[0][1].data.title, "zenc:Hello world")
+  assert.equal(writes[1][1].data.content, "zenc:Hello\n   world")
   for (const [, input] of writes) {
     assert.deepEqual(input.permissions, [
       'read("user:owner")',
@@ -326,6 +333,15 @@ test("provisioning is repeatable, restrictive, non-destructive and seeded from t
         $permissions: input.permissions,
       }),
     getColumn: async ({ tableId, key }) => columns.get(`${tableId}.${key}`),
+    updateVarcharColumn: async (input) => {
+      const column = columns.get(`${input.tableId}.${input.key}`)
+      columns.set(`${input.tableId}.${input.key}`, {
+        ...column,
+        ...input,
+        default: input.xdefault,
+        status: "available",
+      })
+    },
     createIndex: async (input) => {
       const key = `${input.tableId}.${input.key}`
       if (indexes.has(key)) conflict()
@@ -362,13 +378,19 @@ test("provisioning is repeatable, restrictive, non-destructive and seeded from t
   const counts = [tables.size, columns.size, indexes.size, rows.size]
   await provision(fake, "test-database")
   assert.deepEqual([tables.size, columns.size, indexes.size, rows.size], counts)
+  columns.get("conversations.title").size = 120
+  await provision(fake, "test-database")
+  assert.equal(columns.get("conversations.title").size, 1024)
+  assert.equal(columns.get("conversations.title").xdefault, null)
   assert.deepEqual(
     [...tables.keys()],
     [
+      "usage_counters",
       "users",
       "conversations",
       "messages",
       "user_preferences",
+      "user_crypto_keys",
       "attachments",
       "models",
     ]
@@ -381,7 +403,7 @@ test("provisioning is repeatable, restrictive, non-destructive and seeded from t
     assert.equal(table.rowSecurity, name !== "models")
     assert.deepEqual(
       table.$permissions,
-      ["users", "attachments"].includes(name)
+      ["users", "attachments", "usage_counters", "user_crypto_keys"].includes(name)
         ? []
         : [name === "models" ? 'read("users")' : 'create("users")']
     )
@@ -482,8 +504,19 @@ function attachmentStore() {
       },
     },
   }
+  const admission = admissionStore()
+  for (const method of ["getRow", "createRow", "updateRow", "incrementRowColumn", "decrementRowColumn"]) {
+    const original = admin.tablesDB[method]
+    admin.tablesDB[method] = (p) => p.tableId === "usage_counters" ? admission.tablesDB[method](p) : original(p)
+  }
+  admin.tablesDB.createTransaction = admission.tablesDB.createTransaction
+  admin.tablesDB.getTransaction = admission.tablesDB.getTransaction
+  admin.tablesDB.updateTransaction = async (p) => {
+    calls.push(["transaction", p])
+    return admission.tablesDB.updateTransaction(p)
+  }
   globalThis.__dbAdmin = () => admin
-  return { rows, files, admin }
+  return { rows, files, admin, admission }
 }
 const attachmentInput = {
   conversationId: "conversation",
@@ -522,6 +555,20 @@ test("attachment upload reserves owner-only metadata, uses private storage and r
     code: "invalid_file",
   })
   await assert.rejects(db.downloadAttachment(row.$id), { status: 409 })
+})
+
+test("simultaneous same-slot uploads converge on one row and one private file", async () => {
+  const { rows, files, admission } = attachmentStore()
+  const results = await Promise.allSettled([
+    db.createAttachment(attachmentInput),
+    db.createAttachment(attachmentInput),
+  ])
+  assert.equal(results.filter(({ status }) => status === "fulfilled").length, 2)
+  assert.equal(new Set(results.map((result) => result.value.$id)).size, 1)
+  assert.equal(rows.size, 1)
+  assert.equal(files.size, 1)
+  assert.equal(calls.filter(([method]) => method === "file-create").length, 1)
+  assert.ok(admission.counters().every(({ count }) => count === 5))
 })
 
 test("cross-user attachment reads, downloads, processing, removal and attachment linking are rejected", async () => {
@@ -570,12 +617,49 @@ test("enqueue sends only the attachment ID asynchronously and suppresses fresh/r
   assert.equal(calls.filter(([name]) => name === "execution-create").length, 2)
 })
 
+test("simultaneous queue retries create only one Function execution", async () => {
+  const { admin } = attachmentStore()
+  const row = await db.createAttachment(attachmentInput)
+  let executions = 0
+  admin.functions.createExecution = async () => {
+    executions++
+    return { $id: "execution", status: "waiting" }
+  }
+  const results = await Promise.all([
+    db.queueAttachment(row.$id),
+    db.queueAttachment(row.$id),
+  ])
+  assert.equal(executions, 1)
+  assert.ok(results.every((result) => result.status === "processing"))
+})
+
+test("deletion while queueing cannot resurrect attachment state", async () => {
+  const { rows, files, admin } = attachmentStore()
+  const row = await db.createAttachment(attachmentInput)
+  let releaseExecution
+  const executionStarted = Promise.withResolvers()
+  admin.functions.createExecution = async () => {
+    executionStarted.resolve()
+    await new Promise((resolve) => {
+      releaseExecution = resolve
+    })
+    return { $id: "execution", status: "waiting" }
+  }
+  const queueing = db.queueAttachment(row.$id)
+  await executionStarted.promise
+  await db.deleteAttachment(row.$id)
+  releaseExecution()
+  await queueing
+  assert.equal(rows.size, 0)
+  assert.equal(files.size, 0)
+})
+
 test("enqueue failure releases only its reservation and permits explicit retry", async () => {
-  const { rows, admin } = attachmentStore()
+  const { rows, admin, admission } = attachmentStore()
   const row = await db.createAttachment(attachmentInput)
   const create = admin.functions.createExecution
   admin.functions.createExecution = async () => {
-    throw new Error("secret upstream response")
+    throw new AppwriteException("secret upstream response", 400)
   }
   await assert.rejects(db.queueAttachment(row.$id), {
     code: "enqueue_failed",
@@ -584,8 +668,42 @@ test("enqueue failure releases only its reservation and permits explicit retry",
   assert.equal(rows.get(row.$id).status, "uploaded")
   assert.equal(JSON.parse(rows.get(row.$id).metadata).queued, undefined)
   assert.ok(JSON.parse(rows.get(row.$id).metadata).hash)
+  assert.deepEqual(admission.counters().filter((r) => r.resource === "attachment_job").map((r) => r.count), [0, 0])
   admin.functions.createExecution = create
   assert.equal((await db.queueAttachment(row.$id)).status, "processing")
+  assert.deepEqual(admission.counters().filter((r) => r.resource === "attachment_job").map((r) => r.count), [1, 1])
+})
+
+test("ambiguous execution failure keeps admission and suppresses immediate retry", async () => {
+  const { rows, admin, admission } = attachmentStore()
+  const row = await db.createAttachment(attachmentInput)
+  let invoked = 0
+  admin.functions.createExecution = async () => { invoked++; throw new TypeError("fetch failed") }
+  await assert.rejects(db.queueAttachment(row.$id), { code: "enqueue_failed" })
+  await db.queueAttachment(row.$id)
+  assert.equal(invoked, 1)
+  assert.equal(rows.get(row.$id).status, "processing")
+  assert.deepEqual(admission.counters().filter((r) => r.resource === "attachment_job").map((r) => r.count), [1, 1])
+})
+
+test("attachment kill switch prevents Storage and execution calls", async () => {
+  const { admin } = attachmentStore()
+  const row = await db.createAttachment(attachmentInput)
+  let invoked = 0
+  admin.storage.createFile = admin.functions.createExecution = async () => { invoked++ }
+  process.env.ZENOTE_ATTACHMENTS_ENABLED = "false"
+  try {
+    await assert.rejects(db.createAttachment({ ...attachmentInput, slot: 1 }), { code: "service_temporarily_unavailable" })
+    await assert.rejects(db.queueAttachment(row.$id), { code: "service_temporarily_unavailable" })
+    assert.equal(invoked, 0)
+  } finally { delete process.env.ZENOTE_ATTACHMENTS_ENABLED }
+})
+
+test("Storage rejection compensates validated byte amount", async () => {
+  const { admin, admission } = attachmentStore()
+  admin.storage.createFile = async () => { throw new AppwriteException("Rejected", 413) }
+  await assert.rejects(db.createAttachment(attachmentInput))
+  assert.equal(admission.counters()[0].count, 0)
 })
 
 test("enqueue rejects partial or changed private blobs and deleting conversations", async () => {

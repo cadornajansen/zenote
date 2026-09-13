@@ -4,7 +4,7 @@ import { test } from "node:test"
 import handler, { runAttachment } from "../dist/main.js"
 import { ProcessingError } from "../dist/policy.js"
 
-// Optimistic snapshot transactions make simultaneous claims conflict like TablesDB.
+// Revisions are captured on first staged write, not on initial read.
 function fixture() {
   const bytes = Buffer.from("Private document text")
   const row = {
@@ -51,16 +51,18 @@ function fixture() {
   const tablesDB = {
     async createTransaction() {
       const $id = String(++next)
-      transactions.set($id, { version, state: structuredClone(state) })
+      transactions.set($id, {})
       return { $id }
     },
     async getRow({ tableId, transactionId }) {
-      const value = transactions.get(transactionId).state[tableId]
+      const value = (transactions.get(transactionId).state ?? state)[tableId]
       if (!value) throw Object.assign(new Error("missing"), { code: 404 })
       return structuredClone(value)
     },
     async updateRow({ tableId, transactionId, data }) {
-      const draft = transactions.get(transactionId).state
+      const tx = transactions.get(transactionId)
+      if (!tx.state) Object.assign(tx, { version, state: structuredClone(state) })
+      const draft = tx.state
       draft[tableId] = { ...draft[tableId], ...data }
       return structuredClone(draft[tableId])
     },
@@ -101,6 +103,7 @@ function fixture() {
       bucketId: "bucket",
       tableId: "attachments",
       log: (value) => logs.push(value),
+      encryptAttachmentText: async (_tablesDB, _databaseId, _userId, _attachmentId, text) => `zenc:test:${text}`,
     },
   }
 }
@@ -110,7 +113,7 @@ test("a trusted queued row downloads, processes, caches and clears its lease", a
   assert.deepEqual(await runAttachment("attachment", f.dependencies), {
     status: "ready",
   })
-  assert.equal(f.state.attachments.processedText, "Private document text")
+  assert.equal(f.state.attachments.processedText, "zenc:test:Private document text")
   assert.equal(f.state.attachments.processor, "local-text")
   assert.deepEqual(Object.keys(JSON.parse(f.state.attachments.metadata)), [
     "hash",
@@ -131,6 +134,34 @@ test("malformed stored metadata fails closed with a typed error before download"
     assert.equal(f.downloads, 0)
     assert.equal(f.state.attachments.status, "processing")
   }
+})
+test("an execution delayed beyond admission expiry cannot start provider work", async () => {
+  const f = fixture()
+  f.state.attachments.metadata = JSON.stringify({
+    ...JSON.parse(f.state.attachments.metadata), admissionExpiresAt: Date.now() - 1,
+  })
+  let invoked = 0
+  assert.deepEqual(await runAttachment("attachment", f.dependencies, async () => { invoked++; throw new Error("must not run") }), { status: "noop" })
+  assert.equal(invoked, 0)
+  assert.equal(f.downloads, 0)
+})
+test("a competing claim between read and first staged write cannot invoke a second provider", async () => {
+  const f = fixture()
+  const get = f.tablesDB.getRow
+  let first = true
+  f.tablesDB.getRow = async (p) => {
+    const row = await get(p)
+    if (p.tableId === "attachments" && first) {
+      first = false
+      f.state.attachments.metadata = JSON.stringify({
+        ...JSON.parse(f.state.attachments.metadata), lease: "competing-worker",
+      })
+    }
+    return row
+  }
+  let invoked = 0
+  assert.deepEqual(await runAttachment("attachment", f.dependencies, async () => { invoked++; throw new Error("must not run") }), { status: "noop" })
+  assert.equal(invoked, 0)
 })
 test("simultaneous and repeated executions perform processing at most once", async () => {
   const f = fixture()

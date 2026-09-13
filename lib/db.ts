@@ -19,9 +19,16 @@ import {
 } from "node-appwrite"
 import {
   createAdminServerClient,
+  createExecutionServerClient,
   createSessionClient,
 } from "@/lib/appwrite-server"
 import { getModel } from "@/lib/models"
+import {
+  admit, admissionTransaction, definitelyRejected, logAdmissionAllowed,
+  releaseAdmission, requireAdmissionEnabled, stageAdmission, stageRelease,
+  type Admission,
+} from "@/lib/admission"
+import { decryptContent, encryptContent } from "@/lib/content-crypto"
 
 export const RECENT_CONVERSATION_LIMIT = 100
 export const MESSAGE_LIMIT = 100
@@ -177,13 +184,12 @@ async function listConversationsByArchived(isArchived: boolean) {
     ],
   }))
   // Appwrite's parser returns null-prototype rows, which React cannot serialize.
-  return rows
-    .map((row) => ({ ...row }))
-    .sort((a, b) =>
-      (b.lastMessageAt || b.$updatedAt).localeCompare(
-        a.lastMessageAt || a.$updatedAt
-      )
-    )
+  const decrypted = await Promise.all(rows.map(async (row) => ({
+    ...row,
+    title: await decryptContent({ userId: user.$id, entityType: "conversation", rowId: row.$id, fieldName: "title" }, row.title),
+    ...(row.systemPrompt == null ? {} : { systemPrompt: await decryptContent({ userId: user.$id, entityType: "conversation", rowId: row.$id, fieldName: "systemPrompt" }, row.systemPrompt) }),
+  })))
+  return decrypted.sort((a, b) => (b.lastMessageAt || b.$updatedAt).localeCompare(a.lastMessageAt || a.$updatedAt))
 }
 
 export function listConversations() {
@@ -206,7 +212,11 @@ export async function getConversation(id: string, allowDeleting = false) {
     // Defense in depth if a row was accidentally shared; ACLs remain the primary boundary.
     if (row.userId !== user.$id || (row.isDeleting && !allowDeleting))
       throw new DbError("Conversation not found.", 404)
-    return row
+    return {
+      ...row,
+      title: await decryptContent({ userId: user.$id, entityType: "conversation", rowId: row.$id, fieldName: "title" }, row.title),
+      ...(row.systemPrompt == null ? {} : { systemPrompt: await decryptContent({ userId: user.$id, entityType: "conversation", rowId: row.$id, fieldName: "systemPrompt" }, row.systemPrompt) }),
+    }
   } catch (error) {
     if (
       missing(error) ||
@@ -232,7 +242,7 @@ export async function listMessages(conversationId: string) {
       Query.limit(MESSAGE_LIMIT),
     ],
   }))
-  return rows.reverse()
+  return Promise.all(rows.reverse().map(async (row) => ({ ...row, content: await decryptContent({ userId: user.$id, entityType: "message", rowId: row.$id, fieldName: "content" }, row.content) })))
 }
 
 export async function getUserMessage(
@@ -254,7 +264,7 @@ export async function getUserMessage(
     row.status !== "completed"
   )
     throw new DbError("Message not found.", 404)
-  return row
+  return { ...row, content: await decryptContent({ userId: user.$id, entityType: "message", rowId: row.$id, fieldName: "content" }, row.content) }
 }
 
 // The first prompt and its conversation, or a follow-up and its timestamp, commit together.
@@ -283,6 +293,7 @@ async function saveMessage(
     await getUserMessage(input.conversationId!, input.parentMessageId)
   const { tablesDB, databaseId, user, permissions } = await session()
   const conversationId = existing?.$id ?? ID.unique()
+  const newConversationTitle = content.replace(/\s+/g, " ").slice(0, 60).trim()
   const rowId =
     input.role === "assistant" && input.parentMessageId
       ? `a_${input.parentMessageId}`.slice(0, 36)
@@ -299,7 +310,7 @@ async function saveMessage(
         existingMessage.conversationId !== conversationId ||
         existingMessage.role !== "assistant" ||
         existingMessage.parentMessageId !== input.parentMessageId ||
-        existingMessage.content !== input.content
+        (await decryptContent({ userId: user.$id, entityType: "message", rowId: existingMessage.$id, fieldName: "content" }, existingMessage.content)) !== input.content
       )
         throw new DbError("Response already exists.", 409)
       return { conversation: { ...existing }, message: { ...existingMessage } }
@@ -321,7 +332,7 @@ async function saveMessage(
       if (current.isDeleting || current.userId !== user.$id)
         throw new DbError("Conversation not found.", 404)
     }
-    let conversation = existing
+    let conversation: Conversation | null = existing
     if (!conversation) {
       conversation = await tablesDB.createRow<Conversation>({
         databaseId,
@@ -331,7 +342,7 @@ async function saveMessage(
         permissions,
         data: {
           userId: user.$id,
-          title: content.replace(/\s+/g, " ").slice(0, 60).trim(),
+          title: await encryptContent({ userId: user.$id, entityType: "conversation", rowId: conversationId, fieldName: "title" }, newConversationTitle),
           modelId,
           isPinned: false,
           isArchived: false,
@@ -350,7 +361,7 @@ async function saveMessage(
         conversationId,
         userId: user.$id,
         role: input.role,
-        content: input.role === "user" ? content : input.content,
+          content: await encryptContent({ userId: user.$id, entityType: "message", rowId, fieldName: "content" }, input.role === "user" ? content : input.content),
         status: "completed",
         parentMessageId: input.parentMessageId ?? null,
       },
@@ -364,7 +375,10 @@ async function saveMessage(
     })
     signal?.throwIfAborted()
     await tablesDB.updateTransaction({ transactionId, commit: true })
-    return { conversation: { ...conversation }, message: { ...message } }
+    return {
+      conversation: { ...conversation, title: existing?.title ?? newConversationTitle },
+      message: { ...message, content },
+    }
   } catch (error) {
     await tablesDB
       .updateTransaction({ transactionId, rollback: true })
@@ -403,10 +417,10 @@ export async function updateConversation(
   }
 ) {
   await getConversation(id)
-  const { tablesDB, databaseId } = await session()
+  const { tablesDB, databaseId, user } = await session()
   const data: typeof update = {}
   if (update.title !== undefined)
-    data.title = text(update.title, 120).replace(/\s+/g, " ")
+    data.title = await encryptContent({ userId: user.$id, entityType: "conversation", rowId: id, fieldName: "title" }, text(update.title, 120).replace(/\s+/g, " "))
   if (update.modelId !== undefined) data.modelId = validModel(update.modelId)
   for (const key of ["isArchived", "isPinned"] as const) {
     if (update[key] !== undefined) {
@@ -415,12 +429,13 @@ export async function updateConversation(
       data[key] = update[key]
     }
   }
-  return tablesDB.updateRow<Conversation>({
+  const updated = await tablesDB.updateRow<Conversation>({
     databaseId,
     tableId: "conversations",
     rowId: id,
     data,
   })
+  return { ...updated, title: update.title === undefined ? await decryptContent({ userId: user.$id, entityType: "conversation", rowId: id, fieldName: "title" }, updated.title) : update.title, systemPrompt: updated.systemPrompt == null ? updated.systemPrompt : await decryptContent({ userId: user.$id, entityType: "conversation", rowId: id, fieldName: "systemPrompt" }, updated.systemPrompt) }
 }
 
 export async function deleteConversation(id: string) {
@@ -488,7 +503,7 @@ export async function getAttachment(id: string, allowDeleting = false) {
     )
       throw new DbError("Attachment not found.", 404)
     await getConversation(row.conversationId, allowDeleting)
-    return row
+    return { ...row, processedText: row.processedText == null ? row.processedText : await decryptContent({ userId: user.$id, entityType: "attachment", rowId: row.$id, fieldName: "processedText" }, row.processedText) }
   } catch (error) {
     if (
       error instanceof AppwriteException &&
@@ -534,7 +549,7 @@ export async function listConversationAttachments(
       "Attachment permissions need administrator attention.",
       503
     )
-  return rows.map((row) => ({ ...row }))
+  return Promise.all(rows.map(async (row) => ({ ...row, processedText: row.processedText == null ? row.processedText : await decryptContent({ userId: user.$id, entityType: "attachment", rowId: row.$id, fieldName: "processedText" }, row.processedText) })))
 }
 
 export async function createAttachment(input: {
@@ -632,6 +647,7 @@ export async function createAttachment(input: {
       409
     )
   const fileParams = { bucketId, fileId: rowId }
+  requireAdmissionEnabled("attachment_bytes")
   const { storage } = await session()
   try {
     const file = await storage.getFile(fileParams)
@@ -662,6 +678,7 @@ export async function createAttachment(input: {
   } catch (error) {
     if (!(error instanceof AppwriteException && error.code === 404)) throw error
   }
+  const byteAdmission = await admit(user.$id, "attachment_bytes", input.bytes.length)
   try {
     await admin.storage.createFile({
       ...fileParams,
@@ -669,6 +686,7 @@ export async function createAttachment(input: {
       permissions,
     })
   } catch (error) {
+    if (definitelyRejected(error)) await releaseAdmission(byteAdmission, true).catch(() => {})
     if (error instanceof AppwriteException && error.code === 409)
       throw new AttachmentError(
         "busy",
@@ -727,102 +745,105 @@ async function reserveAttachmentExecution(id: string) {
   await getUserMessage(authorized.conversationId, authorized.messageId ?? "")
   const { databaseId, user } = await session()
   const { tablesDB } = createAdminServerClient()
-  const transaction = await tablesDB.createTransaction({ ttl: 60 })
-  try {
-    const params = {
-      databaseId,
-      tableId: "attachments",
-      rowId: id,
-      transactionId: transaction.$id,
-    }
-    const row = await tablesDB.getRow<AttachmentRow>(params)
-    const parent = await tablesDB.getRow<Conversation>({
-      databaseId,
-      tableId: "conversations",
-      rowId: row.conversationId,
-      transactionId: transaction.$id,
-    })
-    if (
-      row.userId !== user.$id ||
-      parent.userId !== user.$id ||
-      parent.isDeleting
-    )
-      throw new DbError("Attachment not found.", 404)
-    if (row.status === "ready" && row.processedText) {
-      await tablesDB.updateTransaction({
-        transactionId: transaction.$id,
-        rollback: true,
+  const config = requireAdmissionEnabled("attachment_job")
+  if (
+    (authorized.status === "ready" && authorized.processedText) ||
+    (authorized.status === "processing" &&
+      Date.now() - Date.parse(authorized.$updatedAt) < ATTACHMENT_LIMITS.leaseMs)
+  )
+    return { row: authorized, queued: null, admission: undefined }
+  return admissionTransaction(async (transactionId) => {
+    try {
+      const params = {
+        databaseId,
+        tableId: "attachments",
+        rowId: id,
+        transactionId,
+      }
+      // Capture a write revision before inspecting queue/lease state. Size is
+      // immutable and already verified against the private canonical upload.
+      await tablesDB.updateRow({
+        ...params,
+        data: { sizeBytes: authorized.sizeBytes },
       })
-      return { row, queued: null }
-    }
-    if (
-      row.status === "processing" &&
-      Date.now() - Date.parse(row.$updatedAt) < ATTACHMENT_LIMITS.leaseMs
-    ) {
-      await tablesDB.updateTransaction({
-        transactionId: transaction.$id,
-        rollback: true,
-      })
-      return { row, queued: null }
-    }
-    const queued = crypto.randomUUID()
-    const metadata = JSON.parse(row.metadata || "{}")
-    delete metadata.lease
-    await tablesDB.updateRow({
-      databaseId,
-      tableId: "conversations",
-      rowId: parent.$id,
-      transactionId: transaction.$id,
-      data: { lastMessageAt: parent.lastMessageAt ?? null },
-    })
-    const updated = await tablesDB.updateRow<AttachmentRow>({
-      ...params,
-      data: {
-        status: "processing",
-        errorCode: null,
-        metadata: JSON.stringify({
-          ...metadata,
-          queued,
-        }),
-      },
-    })
-    await tablesDB.updateTransaction({
-      transactionId: transaction.$id,
-      commit: true,
-    })
-    return { row: updated, queued }
-  } catch (error) {
-    await tablesDB
-      .updateTransaction({ transactionId: transaction.$id, rollback: true })
-      .catch(() => {})
-    if (error instanceof AppwriteException && error.code === 409)
-      throw new AttachmentError(
-        "busy",
-        "This attachment is still processing. Try again shortly.",
-        409
+      const row = await tablesDB.getRow<AttachmentRow>(params)
+      const parentParams = {
+        databaseId,
+        tableId: "conversations",
+        rowId: row.conversationId,
+        transactionId,
+      }
+      const parent = await tablesDB.getRow<Conversation>(parentParams)
+      if (
+        row.userId !== user.$id ||
+        parent.userId !== user.$id ||
+        parent.isDeleting
       )
-    throw error
-  }
+        throw new DbError("Attachment not found.", 404)
+      if (row.status === "ready" && row.processedText)
+        return { row, queued: null, admission: undefined }
+      // Our staged fence updates $updatedAt. Use the authorized timestamp plus
+      // fresh metadata to detect Function claims without renewing stale work.
+      if (
+        row.status === "processing" &&
+        (Date.now() - Date.parse(authorized.$updatedAt) < ATTACHMENT_LIMITS.leaseMs ||
+          row.metadata !== authorized.metadata)
+      )
+        return { row, queued: null, admission: undefined }
+
+      const queued = crypto.randomUUID()
+      const admissionNow = Date.now()
+      const metadata = JSON.parse(row.metadata || "{}")
+      delete metadata.lease
+      await tablesDB.updateRow({
+        ...parentParams,
+        data: { lastMessageAt: parent.lastMessageAt ?? null },
+      })
+      const fencedParent = await tablesDB.getRow<Conversation>(parentParams)
+      if (fencedParent.isDeleting) throw new DbError("Attachment not found.", 404)
+      const updated = await tablesDB.updateRow<AttachmentRow>({
+        ...params,
+        data: {
+          status: "processing",
+          errorCode: null,
+          metadata: JSON.stringify({
+            ...metadata,
+            queued,
+            admissionExpiresAt: admissionNow + config.attachmentLeaseMs,
+          }),
+        },
+      })
+      const admission = await stageAdmission(
+        transactionId, user.$id, "attachment_job",
+        { attachmentId: id, token: queued, now: admissionNow }
+      )
+      return { row: updated, queued, admission }
+    } catch (error) {
+      if (error instanceof AppwriteException && error.type === "row_not_found")
+        throw new DbError("Attachment not found.", 404)
+      throw error
+    }
+  })
 }
 
-async function releaseAttachmentExecution(id: string, queued: string) {
-  await getAttachment(id)
+async function releaseAttachmentExecution(id: string, queued: string, admission: Admission) {
+  const authorized = await getAttachment(id)
   const { databaseId, user } = await session()
   const { tablesDB } = createAdminServerClient()
-  const transaction = await tablesDB.createTransaction({ ttl: 60 })
-  try {
+  return admissionTransaction(async (transactionId) => {
     const params = {
       databaseId,
       tableId: "attachments",
       rowId: id,
-      transactionId: transaction.$id,
+      transactionId,
     }
+    await tablesDB.updateRow({ ...params, data: { sizeBytes: authorized.sizeBytes } })
     const row = await tablesDB.getRow<AttachmentRow>(params)
     const parent = await tablesDB.getRow<Conversation>({
       databaseId,
       tableId: "conversations",
       rowId: row.conversationId,
-      transactionId: transaction.$id,
+      transactionId,
     })
     if (
       row.userId !== user.$id ||
@@ -850,32 +871,26 @@ async function releaseAttachmentExecution(id: string, queued: string) {
         metadata: JSON.stringify(metadata),
       },
     })
-    await tablesDB.updateTransaction({
-      transactionId: transaction.$id,
-      commit: true,
-    })
+    await stageRelease(transactionId, admission, true)
     return updated
-  } catch (error) {
-    await tablesDB
-      .updateTransaction({ transactionId: transaction.$id, rollback: true })
-      .catch(() => {})
-    throw error
-  }
+  })
 }
 
 export async function queueAttachment(id: string) {
   // Verify the canonical private upload before reserving an attempt. Never parse it here.
   await downloadAttachment(id)
-  const { row, queued } = await reserveAttachmentExecution(id)
-  if (!queued) return row
+  const { row, queued, admission } = await reserveAttachmentExecution(id)
+  if (!queued || !admission) return row
+  logAdmissionAllowed("attachment_job")
   try {
-    await createAdminServerClient().functions.createExecution({
+    await createExecutionServerClient().functions.createExecution({
       functionId: "attachment-processor",
       body: JSON.stringify({ attachmentId: id }),
       async: true,
     })
-  } catch {
-    await releaseAttachmentExecution(id, queued).catch(() => {})
+  } catch (error) {
+    if (definitelyRejected(error))
+      await releaseAttachmentExecution(id, queued, admission).catch(() => {})
     throw new AttachmentError(
       "enqueue_failed",
       "Attachment processing could not be queued. Please retry.",
@@ -916,7 +931,7 @@ export async function getUserPreferences() {
     })
     if (row.userId !== user.$id)
       throw new DbError("Preferences not found.", 404)
-    return row
+    return { ...row, customInstructions: row.customInstructions == null ? row.customInstructions : await decryptContent({ userId: user.$id, entityType: "user_preference", rowId: row.$id, fieldName: "customInstructions" }, row.customInstructions) }
   } catch (error) {
     if (missing(error)) return null
     throw error
@@ -943,13 +958,14 @@ export async function updateUserPreferences(update: {
         update.customInstructions.length > 16_000)
     )
       throw new DbError("Custom instructions must be at most 16000 characters.")
-    data.customInstructions = update.customInstructions
+    data.customInstructions = update.customInstructions === null ? null : await encryptContent({ userId: user.$id, entityType: "user_preference", rowId: user.$id, fieldName: "customInstructions" }, update.customInstructions)
   }
-  return tablesDB.upsertRow<UserPreferences>({
+  const saved = await tablesDB.upsertRow<UserPreferences>({
     databaseId,
     tableId: "user_preferences",
     rowId: user.$id,
     permissions,
     data,
   })
+  return { ...saved, customInstructions: update.customInstructions === undefined ? saved.customInstructions == null ? saved.customInstructions : await decryptContent({ userId: user.$id, entityType: "user_preference", rowId: user.$id, fieldName: "customInstructions" }, saved.customInstructions) : update.customInstructions }
 }

@@ -6,13 +6,17 @@ import { randomUUID } from "node:crypto"
 import { Account, AppwriteException, Client, ID, Query, TablesDB, Users } from "node-appwrite"
 import ts from "typescript"
 
-for (const name of ["NEXT_PUBLIC_APPWRITE_ENDPOINT", "NEXT_PUBLIC_APPWRITE_PROJECT_ID", "APPWRITE_DATABASE_ID", "APPWRITE_API_KEY"]) {
+for (const name of ["NEXT_PUBLIC_APPWRITE_ENDPOINT", "NEXT_PUBLIC_APPWRITE_PROJECT_ID", "APPWRITE_DATABASE_ID"]) {
   if (!process.env[name]) throw new Error(`Missing ${name}`)
+}
+const provisioningApiKey = process.env.APPWRITE_PROVISIONING_API_KEY || process.env.APPWRITE_API_KEY
+if (!provisioningApiKey) {
+  throw new Error("Missing APPWRITE_PROVISIONING_API_KEY or APPWRITE_API_KEY")
 }
 const databaseId = process.env.APPWRITE_DATABASE_ID
 const baseClient = () => new Client().setEndpoint(process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT)
   .setProject(process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID)
-const adminClient = baseClient().setKey(process.env.APPWRITE_API_KEY)
+const adminClient = baseClient().setKey(provisioningApiKey)
 const admin = { account: new Account(adminClient), tablesDB: new TablesDB(adminClient) }
 const users = new Users(adminClient)
 let session

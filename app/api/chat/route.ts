@@ -11,6 +11,8 @@ import type { ChatEvent } from "@/lib/chat"
 import { createMessage, DbError, getUserMessage, listMessages } from "@/lib/db"
 import { loadAttachmentContext } from "@/lib/attachments"
 import { AttachmentError } from "@/lib/attachment-policy"
+import { admit, AdmissionError, releaseAdmission, type Admission } from "@/lib/admission"
+import { isAppwriteId, isSameOriginRequest } from "@/lib/request-security"
 
 export const runtime = "nodejs"
 
@@ -51,6 +53,13 @@ async function saveAssistantResponse(
 }
 
 export async function POST(request: Request) {
+  let admission: Admission | undefined
+  const release = async () => {
+    if (!admission) return
+    const receipt = admission
+    admission = undefined
+    await releaseAdmission(receipt).catch(() => {})
+  }
   const started = Date.now()
   const telemetry: ChatTelemetry = {
     requestId: crypto.randomUUID(),
@@ -69,10 +78,10 @@ export async function POST(request: Request) {
     recordChatTelemetry(telemetry)
   }
   try {
-    if (!(await getCurrentUser()))
+    const user = await getCurrentUser()
+    if (!user)
       throw new ChatError("Please sign in to continue chatting.", 401)
-    const origin = request.headers.get("origin")
-    if (origin && origin !== new URL(request.url).origin)
+    if (!isSameOriginRequest(request))
       throw new ChatError("Invalid request origin.", 403)
     if (!request.headers.get("content-type")?.includes("application/json"))
       throw new ChatError("Send a JSON chat request.", 415)
@@ -108,7 +117,7 @@ export async function POST(request: Request) {
     }
     const input = validateChatRequest(parsed)
     const { conversationId, messageId } = parsed as Record<string, unknown>
-    if (typeof conversationId !== "string" || typeof messageId !== "string")
+    if (!isAppwriteId(conversationId) || !isAppwriteId(messageId))
       throw new ChatError("Save your message before generating a response.")
     try {
       const prompt = await getUserMessage(conversationId, messageId)
@@ -157,6 +166,8 @@ export async function POST(request: Request) {
       messageId,
       signal
     )
+    signal.throwIfAborted()
+    admission = await admit(user.$id, "chat_request")
     const events = await streamChat(input, signal, telemetry, attachments)
     const encoder = new TextEncoder()
     let cancelled = false
@@ -198,6 +209,7 @@ export async function POST(request: Request) {
           emit({ type: "error", message: safeChatError(error).message })
         } finally {
           controller.abort()
+          await release()
           log()
           if (!cancelled) output.close()
         }
@@ -217,13 +229,15 @@ export async function POST(request: Request) {
     })
   } catch (error) {
     controller.abort()
+    await release()
     if (request.signal.aborted) telemetry.status = "aborted"
     log()
-    const safe = error instanceof AttachmentError ? error : safeChatError(error)
+    const safe = error instanceof AttachmentError || error instanceof AdmissionError ? error : safeChatError(error)
     return Response.json(
       {
         error: safe.message,
-        ...(error instanceof AttachmentError ? { code: error.code } : {}),
+        ...(error instanceof AttachmentError || error instanceof AdmissionError ? { code: error.code } : {}),
+        ...(error instanceof AdmissionError && error.retryAfter ? { retryAfter: error.retryAfter } : {}),
         requestId: telemetry.requestId,
       },
       {
@@ -231,6 +245,7 @@ export async function POST(request: Request) {
         headers: {
           "Cache-Control": "no-store",
           "X-Request-Id": telemetry.requestId,
+          ...(error instanceof AdmissionError && error.retryAfter ? { "Retry-After": String(error.retryAfter) } : {}),
         },
       }
     )

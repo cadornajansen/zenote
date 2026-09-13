@@ -19,7 +19,7 @@ The Site uploads and authorizes files, enqueues one asynchronous Appwrite Functi
 | Triggers                   | Server async execution only; no events or schedule              |
 | Request body               | Exactly `{"attachmentId":"..."}`                                |
 
-Transactions use `rows.write`; no additional transaction scope is needed. The Site's permanent server key needs canonical `executions.write` in addition to its existing scopes. The Function does not need this scope and cannot queue itself.
+Transactions use `rows.write`; no additional transaction scope is needed. The Site uses the optional `APPWRITE_EXECUTION_API_KEY` with canonical `executions.write` to enqueue work; it falls back to the data key for compatibility. The Function does not need this scope and cannot queue itself.
 
 Build and runtime tiers are separate. This project's `listSpecifications({type: "builds"})` allows a minimum of `s-2vcpu-2gb`; the runtime list allows `s-0.5vcpu-512mb`. Using the runtime minimum for builds causes `400 general_argument_invalid` on `buildSpecification`. Recheck both lists before changing tiers on another project.
 
@@ -41,7 +41,8 @@ Deleting an attachment removes the blob before its row. Deleting a conversation 
 
 | Location                                | Variables / handling                                                                                                                                                            |
 | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Site only                               | `APPWRITE_API_KEY` (secret), `APPWRITE_DATABASE_ID`, `APPWRITE_STORAGE_BUCKET_ID`, existing public endpoint/project and app URL, `ASSEMBLYAI_LLM_BASE_URL`                      |
+| Site only                               | `APPWRITE_API_KEY` (secret data/auth key), recommended `APPWRITE_EXECUTION_API_KEY` (secret execution-only key), `APPWRITE_DATABASE_ID`, `APPWRITE_STORAGE_BUCKET_ID`, existing public endpoint/project and app URL, `ASSEMBLYAI_LLM_BASE_URL` |
+| Setup/CI only                           | `APPWRITE_PROVISIONING_API_KEY`; remove it from the running Site after schema/Function setup                                                                                   |
 | Function or shared project              | `ZENOTE_DATABASE_ID`, `ZENOTE_STORAGE_BUCKET_ID`; optional `ZENOTE_ATTACHMENTS_TABLE_ID=attachments`                                                                            |
 | Shared project where already configured | `ASSEMBLYAI_API_KEY` (secret): Site gateway and Function STT both use it                                                                                                        |
 | Function or existing project            | `AWS_REGION`, `BEDROCK_NOVA_VISION_MODEL_ID`; legacy fallback `BEDROCK_NOVA_MODEL_ID`; secret `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, optional secret `AWS_SESSION_TOKEN` |
@@ -74,7 +75,7 @@ pnpm build
 pnpm dlx appwrite-cli@27.3.0 push function --function-id attachment-processor --activate --force
 ```
 
-Configure/reuse the variables above before pushing. The setup key additionally needs `functions.read/write`; CLI deployment credentials need Function/deployment permissions. Do not use `--with-variables`: it replaces remote variables from a local `.env` and can delete existing secrets. Do not deploy the Site migration until the Function is active, configured, and the Site key has `executions.write`. Otherwise attachment enqueueing fails safely and text-only chat remains the available path. `--force` is for a reviewed Function configuration, not permission errors or unrelated empty configuration fields.
+Configure/reuse the variables above before pushing. The setup key additionally needs `functions.read/write`; CLI deployment credentials need Function/deployment permissions. Do not use `--with-variables`: it replaces remote variables from a local `.env` and can delete existing secrets. Do not deploy the Site migration until the Function is active, configured, and the execution key has `executions.write` (or the compatibility data key retains it). Otherwise attachment enqueueing fails safely and text-only chat remains the available path. `--force` is for a reviewed Function configuration, not permission errors or unrelated empty configuration fields.
 
 Root `pnpm typecheck` and `pnpm build` also typecheck/build the Function, so install its local dependencies before running root verification. Function `npm test` builds first and tests the actual compiled `dist/` output. Root TypeScript excludes `functions/` so Next's compiler settings do not leak across this boundary. Appwrite builds the output from checked-in TypeScript and lockfile, then prunes build-only dependencies; generated `dist/` is not uploaded from a developer machine.
 
@@ -127,4 +128,4 @@ Code deployment and authenticated browser smoke are **not completed**. Function 
 8. As a second user, verify upload/status/retry/delete/download denial for the first user's IDs. Confirm client Appwrite execution is denied by `execute: []`.
 9. Delete disposable conversations and confirm their blobs/rows are removed. Record deployment ID, safe execution statuses and checks, never secrets, OCR text or provider response bodies.
 
-Remaining rollout requirements include actual Cloud build/memory/runtime validation on the lowest specification, credentials/scopes/model access, the live checks above, and existing product-wide provider spend limits/admission policy. This migration does not implement billing or aggregate quotas.
+Remaining rollout requirements include actual Cloud build/memory/runtime validation on the lowest specification, credentials/scopes/model access, and the live checks above. [Phase 4 admission controls](admission-controls.md) now protect upload bytes and processing jobs with aggregate safety quotas and concurrency admission. Deploy the Function's enqueue-expiry guard before the Site admission changes; drain older jobs before rollout.

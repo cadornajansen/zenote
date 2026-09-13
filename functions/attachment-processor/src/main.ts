@@ -9,6 +9,7 @@ import type {
   ProcessorResult,
 } from "./policy.js"
 import { processAttachment } from "./processor.js"
+import { encryptAttachmentText as encryptProcessedText, type CryptoTables } from "./content-crypto.js"
 
 const validId = (id: unknown): id is string =>
   typeof id === "string" && /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,35}$/.test(id)
@@ -39,6 +40,7 @@ interface AttachmentMetadata extends Record<string, unknown> {
   hash: string
   queued?: string
   lease?: string
+  admissionExpiresAt?: number
 }
 
 type Completion =
@@ -76,9 +78,10 @@ export interface ProcessingDependencies extends Pick<
   tablesDB: Pick<
     TablesDB,
     "createTransaction" | "getRow" | "updateRow" | "updateTransaction"
-  >
+  > & CryptoTables
   storage: Pick<Storage, "getFile" | "getFileDownload">
   log: (message: string) => void
+  encryptAttachmentText?: typeof encryptProcessedText
 }
 
 interface FunctionContext {
@@ -135,7 +138,9 @@ function readMetadata(value: string | null): AttachmentMetadata {
     typeof metadata.hash !== "string" ||
     !/^[a-f0-9]{64}$/.test(metadata.hash) ||
     (metadata.queued !== undefined && typeof metadata.queued !== "string") ||
-    (metadata.lease !== undefined && typeof metadata.lease !== "string")
+    (metadata.lease !== undefined && typeof metadata.lease !== "string") ||
+    (metadata.admissionExpiresAt !== undefined &&
+      (typeof metadata.admissionExpiresAt !== "number" || !Number.isSafeInteger(metadata.admissionExpiresAt)))
   )
     throw new ProcessingError("invalid_state")
   return metadata as AttachmentMetadata
@@ -151,6 +156,7 @@ export async function runAttachment(
     tableId,
     bucketId,
     log,
+    encryptAttachmentText = encryptProcessedText,
   }: ProcessingDependencies,
   process: typeof processAttachment = processAttachment
 ): Promise<ExecutionResult> {
@@ -166,6 +172,14 @@ export async function runAttachment(
     const transaction = await tablesDB.createTransaction({ ttl: 60 })
     const transactionId = transaction.$id
     try {
+      const snapshot = readAttachmentRow(
+        await tablesDB.getRow({ ...params, transactionId })
+      )
+      // Capture the write revision before deciding whether a queued attempt may
+      // start. A claim between an ordinary read and its first write must be seen.
+      await tablesDB.updateRow({
+        ...params, transactionId, data: { sizeBytes: snapshot.sizeBytes },
+      })
       const row = readAttachmentRow(
         await tablesDB.getRow({ ...params, transactionId })
       )
@@ -221,7 +235,8 @@ export async function runAttachment(
         delete metadata.queued
       } else {
         // Only the Site can authorize a new attempt. Delayed duplicates of failed jobs are no-ops.
-        if (row.status !== "processing" || !metadata.queued || metadata.lease) {
+        if (row.status !== "processing" || !metadata.queued || metadata.lease ||
+            (metadata.admissionExpiresAt !== undefined && Date.now() >= metadata.admissionExpiresAt)) {
           await tablesDB.updateTransaction({ transactionId, rollback: true })
           return null
         }
@@ -237,6 +252,11 @@ export async function runAttachment(
         transactionId,
         data: { lastMessageAt: parent.lastMessageAt ?? null },
       })
+      const fencedParent = await tablesDB.getRow({
+        databaseId, tableId: "conversations", rowId: parent.$id, transactionId,
+      })
+      if (!isRecord(fencedParent) || fencedParent.isDeleting)
+        throw new ProcessingError("invalid_state")
       const updated = await tablesDB.updateRow({
         ...params,
         transactionId,
@@ -299,9 +319,16 @@ export async function runAttachment(
       emit
     )
     signal.throwIfAborted()
+    const processedText = await encryptAttachmentText(
+      tablesDB,
+      databaseId,
+      active.userId,
+      active.$id,
+      result.text
+    )
     await transition({
       status: "ready",
-      processedText: result.text,
+      processedText,
       processor: result.processor,
       errorCode: null,
     })

@@ -3,6 +3,11 @@ import { readFileSync } from "node:fs"
 import { registerHooks } from "node:module"
 import { test, afterEach } from "node:test"
 import ts from "typescript"
+import { admissionStore } from "./admission-store.mjs"
+
+let admissionDb = admissionStore()
+globalThis.__chatAdmissionAdmin = () => admissionDb
+process.env.APPWRITE_DATABASE_ID = "test"
 
 // Run the actual TypeScript boundaries without adding a runtime/test dependency.
 let user = null
@@ -36,6 +41,8 @@ globalThis.__chatTestSave = (conversationId, input, signal) => {
 }
 registerHooks({
   resolve(specifier, context, next) {
+    if (specifier === "@/lib/appwrite-server")
+      return { url: "data:text/javascript,export const createAdminServerClient=()=>globalThis.__chatAdmissionAdmin()", shortCircuit: true }
     if (specifier === "server-only")
       return { url: "data:text/javascript,export {}", shortCircuit: true }
     if (specifier === "@/lib/auth")
@@ -92,6 +99,9 @@ const originalLog = console.info
 const originalKey = process.env.ASSEMBLYAI_API_KEY
 const originalBase = process.env.ASSEMBLYAI_LLM_BASE_URL
 afterEach(() => {
+  admissionDb = admissionStore()
+  delete process.env.ZENOTE_CHAT_ENABLED
+  delete process.env.ZENOTE_CHAT_PER_MINUTE
   globalThis.fetch = originalFetch
   console.info = originalLog
   user = null
@@ -107,6 +117,54 @@ afterEach(() => {
   else process.env.ASSEMBLYAI_API_KEY = originalKey
   if (originalBase === undefined) delete process.env.ASSEMBLYAI_LLM_BASE_URL
   else process.env.ASSEMBLYAI_LLM_BASE_URL = originalBase
+})
+
+test("chat releases concurrency on success and provider failure, retaining quota", async () => {
+  user = { $id: "test-user" }
+  process.env.ASSEMBLYAI_API_KEY = "mock-key"
+  console.info = () => {}
+  globalThis.fetch = async () => gatewayResponse()
+  let response = await POST(request())
+  await response.text()
+  assert.equal(admissionDb.leases()[0].count, 0)
+  globalThis.fetch = async () => new Response("provider failed", { status: 500 })
+  response = await POST(request())
+  await response.text()
+  assert.equal(admissionDb.leases()[0].count, 0)
+  assert.deepEqual(admissionDb.counters().map((r) => r.count), [2, 2, 2])
+})
+
+test("chat kill switch prevents provider calls; invalid/auth requests consume nothing", async () => {
+  let invoked = 0
+  console.info = () => {}
+  globalThis.fetch = async () => { invoked++; return gatewayResponse() }
+  assert.equal((await POST(request())).status, 401)
+  user = { $id: "test-user" }
+  assert.equal((await POST(request({ ...input, model: "invalid" }))).status, 400)
+  missingPrompt = true
+  await POST(request())
+  missingPrompt = false
+  process.env.ZENOTE_CHAT_ENABLED = "false"
+  const response = await POST(request())
+  assert.equal(response.status, 503)
+  assert.equal((await response.json()).code, "service_temporarily_unavailable")
+  assert.equal(invoked, 0)
+  assert.equal(admissionDb.rows.size, 0)
+})
+
+test("chat admission errors preserve code and deterministic Retry-After", async () => {
+  user = { $id: "test-user" }
+  process.env.ASSEMBLYAI_API_KEY = "mock-key"
+  process.env.ZENOTE_CHAT_PER_MINUTE = "1"
+  console.info = () => {}
+  globalThis.fetch = async () => gatewayResponse()
+  await (await POST(request())).text()
+  const response = await POST(request())
+  assert.equal(response.status, 429)
+  const body = await response.json()
+  assert.equal(body.code, "rate_limit_exceeded")
+  assert.ok(body.retryAfter >= 1 && body.retryAfter <= 60)
+  assert.equal(response.headers.get("Retry-After"), String(body.retryAfter))
 })
 
 const input = {
@@ -151,10 +209,14 @@ function configure() {
   process.env.ASSEMBLYAI_API_KEY = "test-key-not-a-secret"
   process.env.ASSEMBLYAI_LLM_BASE_URL = "https://llm-gateway.assemblyai.com/v1"
 }
-function request(body = input, headers = {}) {
+function request(body = input, headers = {}, includeOrigin = true) {
   return new Request("http://localhost:3000/api/chat", {
     method: "POST",
-    headers: { "content-type": "application/json", ...headers },
+    headers: {
+      "content-type": "application/json",
+      ...(includeOrigin ? { origin: "http://localhost:3000" } : {}),
+      ...headers,
+    },
     body: JSON.stringify({
       conversationId: "test-conversation",
       messageId: "test-message",
@@ -422,14 +484,55 @@ test("route authenticates before gateway calls and rejects malformed bodies/orig
     (await POST(request(input, { origin: "https://other.example" }))).status,
     403
   )
+  assert.equal((await POST(request(input, {}, false))).status, 403)
+  assert.equal((await POST(request(input, { origin: "null" }))).status, 403)
+  assert.equal(
+    (await POST(request(input, { origin: "not a URL" }))).status,
+    403
+  )
   assert.equal(
     (await POST(request({ ...input, model: "made-up" }))).status,
+    400
+  )
+  assert.equal(
+    (
+      await POST(
+        new Request("http://localhost:3000/api/chat", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            origin: "http://localhost:3000",
+          },
+          body: "{broken",
+        })
+      )
+    ).status,
+    400
+  )
+  assert.equal(
+    (await POST(request(input, { "content-type": "text/plain" }))).status,
+    415
+  )
+  assert.equal(
+    (
+      await POST(
+        request({
+          ...input,
+          messages: [{ role: "system", content: "not allowed" }],
+        })
+      )
+    ).status,
+    400
+  )
+  assert.equal(
+    (await POST(request({ ...input, conversationId: "../bad" }))).status,
     400
   )
   assert.equal(
     (await POST(request({ ...input, padding: "x".repeat(512_001) }))).status,
     413
   )
+  assert.equal(admissionDb.rows.size, 0)
 })
 
 test("route streams normalized events and logs no prompt/key", async () => {
@@ -444,8 +547,9 @@ test("route streams normalized events and logs no prompt/key", async () => {
   )
   assert.equal(response.status, 200)
   assert.equal(events.at(-1).type, "done")
-  assert.equal(logs[0].status, "complete")
-  assert.equal(logs[0].actualModel, "gpt-5.6-luna")
+  const chatLog = logs.find((log) => log.event === "chat.request")
+  assert.equal(chatLog.status, "complete")
+  assert.equal(chatLog.actualModel, "gpt-5.6-luna")
   assert.doesNotMatch(JSON.stringify(logs), /Hello|test-key-not-a-secret/)
   assert.deepEqual(savedMessages, [
     {
@@ -525,7 +629,8 @@ test("stopping downstream propagates abort to the upstream provider", async () =
   await reader.cancel()
   await new Promise((resolve) => setTimeout(resolve, 10))
   assert.equal(upstreamSignal.aborted, true)
-  assert.equal(logs[0].status, "aborted")
+  assert.equal(logs.find((log) => log.event === "chat.request").status, "aborted")
+  assert.equal(admissionDb.leases()[0].count, 0)
   assert.equal(savedMessages.length, 0)
 })
 

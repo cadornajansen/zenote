@@ -18,7 +18,7 @@
       "scopes": ["rows.read", "rows.write", "files.read"],
       "buildSpecification": "s-2vcpu-2gb",
       "runtimeSpecification": "s-0.5vcpu-512mb",
-      "ignore": ["node_modules", "dist", "tests", ".env", ".env.*", ".git"]
+      "ignore": ["node_modules", "dist", "tests", "scripts", ".env", ".env.*", ".git"]
     }
   ]
 }

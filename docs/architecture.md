@@ -147,7 +147,7 @@ PNG/JPEG/WebP use sharp validation followed by synchronous Textract `AnalyzeDocu
 
 AssemblyAI transcript deletion is attempted after success, failure or cancellation using a separate cleanup timeout. The provider documents that transcript deletion also removes the uploaded audio. If no transcript ID is received, or cleanup fails, provider retention applies (default upload TTL 72 hours; configure a shorter provider retention policy where required). Zenote does not claim guaranteed provider-side erasure on network failure. Original Appwrite blobs and cached text remain until attachment/conversation deletion. Tool-loop contracts remain inactive; billing webhook, durable cost accounting and automated cleanup/reconciliation remain deferred.
 
-Before public paid rollout, operators must configure provider spend limits/alerts and an admission or quota policy. Per-file limits and processing leases bound individual requests and duplicate work, not a user's aggregate spend; this phase does not add a distributed rate limiter or billing tables.
+Phase 4 adds private TablesDB admission buckets, per-user concurrency leases, daily global ceilings and deployment kill switches around chat and attachment paid paths. See [admission controls](admission-controls.md) for defaults, atomic semantics and rollout requirements. These are safety controls, separate from future usage metering and billing. Provider-side spend limits and alerts remain useful independent emergency controls.
 
 ## AI verification
 

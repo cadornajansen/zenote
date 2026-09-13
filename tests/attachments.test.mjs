@@ -9,6 +9,8 @@ globalThis.__attachmentUser = () => user
 globalThis.__attachmentDb = {}
 registerHooks({
   resolve(specifier, context, next) {
+    if (specifier === "@/lib/appwrite-server")
+      return { url: "data:text/javascript,export const createAdminServerClient=()=>{throw new Error('Unexpected admin call')}", shortCircuit: true }
     if (specifier === "server-only")
       return { url: "data:text/javascript,export {}", shortCircuit: true }
     if (specifier === "@/lib/auth")
@@ -54,6 +56,7 @@ const { LIMITS, TYPES, boundedText } =
   await import("../functions/attachment-processor/src/policy.ts")
 const { waitForAttachments } = await import("../lib/attachment-client.ts")
 const route = await import("../app/api/attachments/route.ts")
+const { AdmissionError } = await import("../lib/admission.ts")
 const originalFetch = globalThis.fetch
 const bytes = Buffer.from("Document content")
 beforeEach(() => {
@@ -105,11 +108,36 @@ beforeEach(() => {
 afterEach(() => {
   globalThis.fetch = originalFetch
 })
-const request = (method, name = "notes.txt", body = bytes, headers) =>
-  new Request(
-    `http://localhost:3000/api/attachments?conversationId=conversation&messageId=prompt&slot=0&id=attachment&name=${encodeURIComponent(name)}`,
-    { method, ...(method === "POST" ? { body } : {}), headers }
+const request = (
+  method,
+  name = "notes.txt",
+  body = bytes,
+  headers = {},
+  includeOrigin = true,
+  query = ""
+) => {
+  const params = new URLSearchParams({
+    conversationId: "conversation",
+    messageId: "prompt",
+    slot: "0",
+    id: "attachment",
+    name,
+  })
+  for (const [key, value] of new URLSearchParams(query)) params.set(key, value)
+  return new Request(
+    `http://localhost:3000/api/attachments?${params}`,
+    {
+      method,
+      ...(method === "POST" ? { body } : {}),
+      headers: {
+        ...(method !== "GET" && includeOrigin
+          ? { origin: "http://localhost:3000" }
+          : {}),
+        ...headers,
+      },
+    }
   )
+}
 
 test("all attachment routes authenticate and deny foreign ownership before work", async () => {
   for (const method of ["POST", "PATCH", "GET", "DELETE"]) {
@@ -120,6 +148,13 @@ test("all attachment routes authenticate and deny foreign ownership before work"
     assert.equal((await route[method](request(method))).status, 404)
   }
   assert.equal(calls.length, 0)
+})
+test("attachment admission responses preserve safe codes and Retry-After", async () => {
+  globalThis.__attachmentDb.queueAttachment = async () => { throw new AdmissionError("daily_limit_exceeded", 429, 60) }
+  const response = await route.PATCH(request("PATCH"))
+  assert.equal(response.status, 429)
+  assert.equal(response.headers.get("Retry-After"), "60")
+  assert.equal((await response.json()).code, "daily_limit_exceeded")
 })
 test("upload enforces type, stream size and origin before enqueue", async () => {
   assert.equal((await route.POST(request("POST", "bad.svg"))).status, 400)
@@ -138,17 +173,111 @@ test("upload enforces type, stream size and origin before enqueue", async () => 
     ).status,
     403
   )
-  assert.equal(calls.length, 0)
-  const response = await route.POST(
-    request("POST", "notes.txt", bytes, { "content-type": "image/png" })
+  assert.equal(
+    (await route.POST(request("POST", "notes.txt", bytes, {}, false))).status,
+    403
   )
-  assert.equal(response.status, 202)
+  assert.equal(
+    (
+      await route.POST(
+        request("POST", "notes.txt", bytes, { origin: "null" })
+      )
+    ).status,
+    403
+  )
+  assert.equal(
+    (
+      await route.POST(
+        request("POST", "notes.txt", bytes, { origin: "not a URL" })
+      )
+    ).status,
+    403
+  )
+  assert.equal(calls.length, 0)
+  assert.equal(
+    (
+      await route.POST(
+        request("POST", "notes.txt", bytes, { "content-type": "image/png" })
+      )
+    ).status,
+    400
+  )
+  const accepted = await route.POST(
+    request("POST", "notes.txt", bytes, {
+      "content-type": "text/plain; charset=utf-8",
+      origin: "HTTP://LOCALHOST:3000",
+      "x-forwarded-host": "foreign.example",
+    })
+  )
+  assert.equal(accepted.status, 202)
   assert.equal(calls[0][1].mimeType, "text/plain")
   assert.deepEqual(
     calls.map(([name]) => name),
     ["upload", "enqueue"]
   )
-  assert.equal((await response.json()).attachment.status, "processing")
+  assert.equal((await accepted.json()).attachment.status, "processing")
+})
+
+test("attachment input edge cases fail before persistence or admission", async () => {
+  for (const name of [
+    "../notes.txt",
+    "folder\\notes.txt",
+    "bad\u0000.txt",
+    "bad\u202etxt.exe",
+    `${"x".repeat(181)}.txt`,
+  ])
+    assert.equal((await route.POST(request("POST", name))).status, 400)
+  for (const slot of ["-1", "1.5", "word", "4"])
+    assert.equal(
+      (
+        await route.POST(
+          request("POST", "notes.txt", bytes, {}, true, `slot=${slot}`)
+        )
+      ).status,
+      400
+    )
+  assert.equal(
+    (
+      await route.POST(
+        request("POST", "notes.txt", bytes, { "content-length": "invalid" })
+      )
+    ).status,
+    400
+  )
+  assert.equal(
+    (
+      await route.POST(
+        request("POST", "notes.txt", bytes, { "content-length": "999" })
+      )
+    ).status,
+    400
+  )
+  assert.equal(
+    (await route.PATCH(request("PATCH", "notes.txt", bytes, {}, true, "id=../bad")))
+      .status,
+    400
+  )
+  assert.equal(
+    (await route.DELETE(request("DELETE", "notes.txt", bytes, {}, true, "id=")))
+      .status,
+    400
+  )
+  assert.equal(
+    (
+      await route.GET(
+        request(
+          "GET",
+          "notes.txt",
+          bytes,
+          {},
+          false,
+          "conversationId=../bad"
+        )
+      )
+    ).status,
+    400
+  )
+  assert.equal(calls.length, 0)
 })
 test("PATCH is an explicit enqueue retry, GET never enqueues or exposes private fields", async () => {
   assert.equal((await route.PATCH(request("PATCH"))).status, 202)
