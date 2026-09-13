@@ -12,6 +12,7 @@ import {
   APPWRITE_SESSION_COOKIE,
   createAdminServerClient,
   createSessionClient,
+  isTrustedAppwriteOAuthUrl,
 } from "@/lib/appwrite-server"
 
 export type AuthUser = Pick<
@@ -19,16 +20,40 @@ export type AuthUser = Pick<
   "$id" | "email" | "name"
 >
 
-const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000"
+const sessionCookieOptions = () => ({
+  httpOnly: true as const,
+  secure: process.env.NODE_ENV === "production",
+  sameSite: "lax" as const,
+  path: "/",
+})
+
+export function applicationUrl(path: string) {
+  const configured = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"
+  const base = new URL(configured)
+  if (
+    (base.protocol !== "http:" && base.protocol !== "https:") ||
+    base.username ||
+    base.password ||
+    (process.env.NODE_ENV === "production" && base.protocol !== "https:")
+  )
+    throw new Error("NEXT_PUBLIC_APP_URL is not a trusted application origin")
+  return new URL(path, `${base.origin}/`).toString()
+}
+
+export function isValidAuthTokenInput(userId: string, secret: string) {
+  return (
+    /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,35}$/.test(userId) &&
+    secret.length > 0 &&
+    secret.length <= 2048 &&
+    !/[\x00-\x1f\x7f]/.test(secret)
+  )
+}
 
 async function storeSession(session: Models.Session) {
   const cookieStore = await cookies()
   cookieStore.set(APPWRITE_SESSION_COOKIE, session.secret, {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "lax",
+    ...sessionCookieOptions(),
     expires: new Date(session.expire),
-    path: "/",
   })
 }
 
@@ -51,14 +76,19 @@ export async function signInWithEmail(email: string, password: string) {
 
 export async function signInWithGoogle() {
   const { account } = createAdminServerClient()
-  return account.createOAuth2Token({
+  const authorizationUrl = await account.createOAuth2Token({
     provider: OAuthProvider.Google,
-    success: `${appUrl}/auth/oauth/callback`,
-    failure: `${appUrl}/login?error=oauth`,
+    success: applicationUrl("/auth/oauth/callback"),
+    failure: applicationUrl("/login?error=oauth"),
   })
+  if (!isTrustedAppwriteOAuthUrl(authorizationUrl))
+    throw new Error("Appwrite returned an untrusted OAuth URL")
+  return authorizationUrl
 }
 
 export async function completeGoogleSignIn(userId: string, secret: string) {
+  if (!isValidAuthTokenInput(userId, secret))
+    throw new Error("Invalid OAuth callback")
   const { account } = createAdminServerClient()
   const session = await account.createSession({ userId, secret })
   await storeSession(session)
@@ -66,20 +96,22 @@ export async function completeGoogleSignIn(userId: string, secret: string) {
 
 export async function signOut() {
   const cookieStore = await cookies()
-  const client = await createSessionClient()
 
   try {
+    const client = await createSessionClient()
     await client?.account.deleteSession({ sessionId: "current" })
   } finally {
-    cookieStore.delete(APPWRITE_SESSION_COOKIE)
+    cookieStore.set(APPWRITE_SESSION_COOKIE, "", {
+      ...sessionCookieOptions(),
+      expires: new Date(0),
+    })
   }
 }
 
 export async function getCurrentUser(): Promise<AuthUser | null> {
-  const client = await createSessionClient()
-  if (!client) return null
-
   try {
+    const client = await createSessionClient()
+    if (!client) return null
     const user = await client.account.get()
     return { $id: user.$id, email: user.email, name: user.name }
   } catch {
@@ -89,7 +121,17 @@ export async function getCurrentUser(): Promise<AuthUser | null> {
 
 export async function startPasswordRecovery(email: string) {
   const { account } = createAdminServerClient()
-  await account.createRecovery({ email, url: `${appUrl}/reset-password` })
+  try {
+    await account.createRecovery({
+      email,
+      url: applicationUrl("/reset-password"),
+    })
+  } catch (error) {
+    // Recovery is intentionally account-enumeration resistant.
+    if (error instanceof AppwriteException && error.type === "user_not_found")
+      return
+    throw error
+  }
 }
 
 export async function resetPassword(
@@ -97,6 +139,8 @@ export async function resetPassword(
   secret: string,
   password: string
 ) {
+  if (!isValidAuthTokenInput(userId, secret))
+    throw new Error("Invalid recovery request")
   const { account } = createAdminServerClient()
   await account.updateRecovery({ userId, secret, password })
 }
@@ -108,11 +152,10 @@ export function getAuthErrorMessage(error: unknown) {
 
   switch (error.type) {
     case "user_invalid_credentials":
+    case "user_not_found":
       return "Invalid email or password."
     case "user_already_exists":
       return "An account with this email already exists."
-    case "user_not_found":
-      return "No account was found for this email."
     case "user_token_expired":
     case "user_invalid_token":
       return "This recovery link has expired or is invalid."

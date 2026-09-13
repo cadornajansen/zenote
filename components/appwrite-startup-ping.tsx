@@ -15,8 +15,8 @@ export function AppwriteStartupPing() {
       .then(() => {
         console.info("[Appwrite] connection ready")
       })
-      .catch((error: unknown) => {
-        console.error("[Appwrite] connection failed", error)
+      .catch(() => {
+        console.error("[Appwrite] connection failed")
       })
   }, [])
 

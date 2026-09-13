@@ -4,6 +4,7 @@ import { redirect } from "next/navigation"
 
 import {
   getAuthErrorMessage,
+  isValidAuthTokenInput,
   resetPassword,
   signInWithEmail,
   signInWithGoogle,
@@ -23,7 +24,7 @@ function field(formData: FormData, name: string) {
 }
 
 function validateEmail(email: string) {
-  return /^\S+@\S+\.\S+$/.test(email)
+  return email.length <= 254 && /^\S+@\S+\.\S+$/.test(email)
 }
 
 function validatePassword(password: string) {
@@ -58,7 +59,7 @@ export async function signUpAction(
   const email = field(formData, "email")
   const password = field(formData, "password")
 
-  if (!name) return { error: "Enter your name." }
+  if (!name || name.length > 128) return { error: "Enter your name." }
   if (!validateEmail(email)) return { error: "Enter a valid email address." }
   if (!validatePassword(password)) {
     return { error: "Password must contain at least 8 characters." }
@@ -114,7 +115,7 @@ export async function resetPasswordAction(
   const password = field(formData, "password")
   const confirmPassword = field(formData, "confirmPassword")
 
-  if (!userId || !secret) {
+  if (!isValidAuthTokenInput(userId, secret)) {
     return { error: "This recovery link is invalid." }
   }
   if (!validatePassword(password)) {

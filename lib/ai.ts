@@ -50,6 +50,12 @@ export function recordChatTelemetry(event: ChatTelemetry) {
   console.info(JSON.stringify({ event: "chat.request", ...event }))
 }
 
+function safeProviderRequestId(value: unknown) {
+  return typeof value === "string" && /^[a-zA-Z0-9._:/-]{1,200}$/.test(value)
+    ? value
+    : undefined
+}
+
 export class ChatError extends Error {
   constructor(
     message: string,
@@ -310,8 +316,9 @@ export async function streamChat(
     }
   )
   telemetry.providerStatus = response.status
-  telemetry.providerRequestId =
-    response.headers.get("x-request-id") ?? undefined
+  telemetry.providerRequestId = safeProviderRequestId(
+    response.headers.get("x-request-id")
+  )
   response.headers.forEach((value, name) => {
     if (/^(x-)?ratelimit[-a-z]*$/.test(name) || name === "retry-after")
       telemetry.rateLimits[name] = value.slice(0, 200)
@@ -361,7 +368,9 @@ export async function streamChat(
           502
         )
       telemetry.providerRequestId =
-        chunk.request_id ?? chunk.id ?? telemetry.providerRequestId
+        safeProviderRequestId(chunk.request_id) ??
+        safeProviderRequestId(chunk.id) ??
+        telemetry.providerRequestId
       if (
         typeof chunk.model === "string" &&
         chunk.model !== telemetry.actualModel
