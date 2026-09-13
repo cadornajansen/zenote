@@ -172,6 +172,16 @@ test("OAuth callback rejects malformed or failed exchanges without setting a coo
   assert.equal(cookieCalls.length, 0)
 })
 
+test("OAuth callback accepts Appwrite token secrets without imposing a format", async () => {
+  const response = await callback.GET({
+    nextUrl: new URL(
+      "https://zenote.example/auth/oauth/callback?userId=owner&secret=token%2Bwith%2Fprovider%3Dcharacters"
+    ),
+  })
+  assert.equal(response.headers.get("location"), "https://zenote.example/chat")
+  assert.equal(cookieCalls.length, 1)
+})
+
 test("OAuth success uses fixed trusted redirects and rejects untrusted authorization URLs", async () => {
   const response = await callback.GET({
     nextUrl: new URL(

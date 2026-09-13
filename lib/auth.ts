@@ -44,8 +44,7 @@ export function isValidAuthTokenInput(userId: string, secret: string) {
   return (
     /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,35}$/.test(userId) &&
     secret.length > 0 &&
-    secret.length <= 2048 &&
-    !/[\x00-\x1f\x7f]/.test(secret)
+    secret.length <= 2048
   )
 }
 
@@ -81,8 +80,16 @@ export async function signInWithGoogle() {
     success: applicationUrl("/auth/oauth/callback"),
     failure: applicationUrl("/login?error=oauth"),
   })
-  if (!isTrustedAppwriteOAuthUrl(authorizationUrl))
+  if (!isTrustedAppwriteOAuthUrl(authorizationUrl)) {
+    let host: string | undefined
+    try {
+      host = new URL(authorizationUrl).host
+    } catch {
+      host = "invalid"
+    }
+    console.error("Google OAuth authorization URL rejected", { host })
     throw new Error("Appwrite returned an untrusted OAuth URL")
+  }
   return authorizationUrl
 }
 

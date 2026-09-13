@@ -1,5 +1,6 @@
 "use server"
 
+import { AppwriteException } from "node-appwrite"
 import { redirect } from "next/navigation"
 
 import {
@@ -80,7 +81,16 @@ export async function startGoogleAction(_formData: FormData) {
 
   try {
     authorizationUrl = await signInWithGoogle()
-  } catch {
+  } catch (error) {
+    console.error("Google OAuth initiation failed", {
+      errorClass: error instanceof Error ? error.constructor.name : typeof error,
+      code: error instanceof AppwriteException ? error.code : undefined,
+      type: error instanceof AppwriteException ? error.type : undefined,
+      message:
+        error instanceof AppwriteException
+          ? "Appwrite OAuth token creation failed"
+          : "OAuth token creation failed",
+    })
     redirect("/login?error=oauth")
   }
 
