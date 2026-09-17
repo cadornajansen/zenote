@@ -21,6 +21,7 @@ test("model credit weights are centralized and complete", () => {
   assert.equal(modelCreditWeight("gpt-5-mini"), 1)
   assert.equal(modelCreditWeight("gpt-5-6-sol"), 5)
   assert.equal(modelCreditWeight("claude-opus-5"), 6)
+  assert.equal(modelCreditWeight("gpt-6-astra"), 7)
   assert.throws(() => modelCreditWeight("unknown"))
 })
 

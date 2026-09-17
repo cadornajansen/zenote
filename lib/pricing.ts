@@ -6,18 +6,6 @@ export const CREDIT_CONFIG = {
   freeMonthlyCredits: () => integerEnv("ZENOTE_FREE_MONTHLY_CREDITS", 150),
 } as const
 
-const MODEL_CREDIT_WEIGHTS: Record<string, number> = {
-  "gpt-5-nano": 1,
-  "gpt-5-mini": 1,
-  "gemini-3-7-flash": 1,
-  "gpt-5-6-luna": 2,
-  "claude-haiku-4-5": 2,
-  "gpt-5-6-terra": 3,
-  "claude-sonnet-5": 4,
-  "gpt-5-6-sol": 5,
-  "claude-opus-5": 6,
-}
-
 export type PurchaseType = "payg" | "starter" | "power" | "max"
 export type PurchaseOffer = {
   type: PurchaseType
@@ -43,13 +31,13 @@ function integerEnv(key: string, fallback: number) {
 }
 
 export function modelCreditWeight(modelId: string) {
-  if (!getModel(modelId) || !MODEL_CREDIT_WEIGHTS[modelId])
-    throw new Error("Unknown credit-priced model")
-  return MODEL_CREDIT_WEIGHTS[modelId]
+  const weight = getModel(modelId)?.creditWeight
+  if (weight === undefined) throw new Error("Unknown credit-priced model")
+  return weight
 }
 
 export function modelCreditRates() {
-  return models.map((model) => ({ ...model, credits: modelCreditWeight(model.id) }))
+  return models.map((model) => ({ ...model, credits: model.creditWeight }))
 }
 
 export function resolvePurchaseOffer(input: { type: PurchaseType; amountPhpCentavos?: number }): PurchaseOffer {

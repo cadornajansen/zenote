@@ -233,9 +233,9 @@ function request(body = input, headers = {}, includeOrigin = true) {
   })
 }
 
-test("registry has exactly nine models and one compatible fallback each", () => {
-  assert.equal(models.length, 9)
-  assert.equal(new Set(models.map((model) => model.id)).size, 9)
+test("registry has exactly ten models and one compatible fallback each", () => {
+  assert.equal(models.length, 10)
+  assert.equal(new Set(models.map((model) => model.id)).size, 10)
   assert.equal(
     getModel("claude-haiku-4-5").providerModelId,
     "claude-haiku-4-5-20251001"

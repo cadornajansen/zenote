@@ -6,6 +6,7 @@ export type ModelConfig = {
   providerModelId: string
   fallbackModelId: string
   caching: "automatic" | "explicit"
+  creditWeight: number
   // Capabilities enabled through Zenote, not the underlying model's full feature set.
   capabilities: {
     text: boolean
@@ -37,6 +38,7 @@ export const models: readonly ModelConfig[] = (
       providerModelId: "gpt-5-nano",
       fallbackModelId: "gpt-5-mini",
       caching: "automatic",
+      creditWeight: 1,
     },
     {
       id: "gpt-5-mini",
@@ -45,6 +47,7 @@ export const models: readonly ModelConfig[] = (
       providerModelId: "gpt-5-mini",
       fallbackModelId: "gpt-5-6-luna",
       caching: "automatic",
+      creditWeight: 1,
     },
     {
       id: "gpt-5-6-luna",
@@ -53,6 +56,7 @@ export const models: readonly ModelConfig[] = (
       providerModelId: "gpt-5.6-luna",
       fallbackModelId: "gpt-5-mini",
       caching: "automatic",
+      creditWeight: 2,
     },
     {
       id: "gpt-5-6-terra",
@@ -61,6 +65,7 @@ export const models: readonly ModelConfig[] = (
       providerModelId: "gpt-5.6-terra",
       fallbackModelId: "gpt-5-6-luna",
       caching: "automatic",
+      creditWeight: 3,
     },
     {
       id: "gpt-5-6-sol",
@@ -69,6 +74,16 @@ export const models: readonly ModelConfig[] = (
       providerModelId: "gpt-5.6-sol",
       fallbackModelId: "gpt-5-6-terra",
       caching: "automatic",
+      creditWeight: 5,
+    },
+    {
+      id: "gpt-6-astra",
+      name: "GPT-6 Astra",
+      description: "Flagship reasoning and deep analysis",
+      providerModelId: "gpt-6-astra",
+      fallbackModelId: "gpt-5-6-sol",
+      caching: "automatic",
+      creditWeight: 7,
     },
     {
       id: "gemini-3-7-flash",
@@ -77,6 +92,7 @@ export const models: readonly ModelConfig[] = (
       providerModelId: "gemini-3.7-flash",
       fallbackModelId: "gpt-5-6-luna",
       caching: "automatic",
+      creditWeight: 1,
     },
     {
       id: "claude-haiku-4-5",
@@ -85,6 +101,7 @@ export const models: readonly ModelConfig[] = (
       providerModelId: "claude-haiku-4-5-20251001",
       fallbackModelId: "gpt-5-mini",
       caching: "explicit",
+      creditWeight: 2,
     },
     {
       id: "claude-sonnet-5",
@@ -93,6 +110,7 @@ export const models: readonly ModelConfig[] = (
       providerModelId: "claude-sonnet-5",
       fallbackModelId: "gpt-5-6-terra",
       caching: "explicit",
+      creditWeight: 4,
     },
     {
       id: "claude-opus-5",
@@ -101,6 +119,7 @@ export const models: readonly ModelConfig[] = (
       providerModelId: "claude-opus-5",
       fallbackModelId: "gpt-5-6-sol",
       caching: "explicit",
+      creditWeight: 6,
     },
   ] satisfies Omit<ModelConfig, "provider" | "capabilities">[]
 ).map((model) => ({

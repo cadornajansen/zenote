@@ -53,7 +53,7 @@ The UI and product logic use Zenote model IDs from `lib/models.ts`, such as `gpt
 
 ## 6. Model registry
 
-The implemented `lib/models.ts` is the single source for visible models, provider model IDs, enabled capabilities, cache policy, and one fallback:
+The implemented `lib/models.ts` is the single source for visible models, provider model IDs, enabled capabilities, cache policy, credit weight, and one fallback:
 
 ```ts
 type ModelConfig = {
@@ -64,6 +64,7 @@ type ModelConfig = {
   providerModelId: string
   fallbackModelId: string
   caching: "automatic" | "explicit"
+  creditWeight: number
   capabilities: {
     text: boolean
     streaming: boolean
@@ -76,7 +77,7 @@ type ModelConfig = {
 }
 ```
 
-Visible models are GPT-5 Nano, GPT-5 Mini, GPT-5.6 Luna, GPT-5.6 Terra, GPT-5.6 Sol, Gemini 3.7 Flash, Claude Haiku 4.5, Claude Sonnet 5, and Claude Opus 5. Phase 1 enables streaming text only; native image/file/audio input, tool use, and explicit reasoning requests are disabled. This describes Zenote's enabled path, not every underlying model capability.
+Visible models are GPT-6 Astra, GPT-5 Nano, GPT-5 Mini, GPT-5.6 Luna, GPT-5.6 Terra, GPT-5.6 Sol, Gemini 3.7 Flash, Claude Haiku 4.5, Claude Sonnet 5, and Claude Opus 5. Phase 1 enables streaming text only; native image/file/audio input, tool use, and explicit reasoning requests are disabled. This describes Zenote's enabled path, not every underlying model capability.
 
 ## 7. Multimodal routing
 
@@ -108,7 +109,7 @@ Cached text and total injected attachment context are separately bounded to 24,0
 
 ## 9. Provider fallback strategy
 
-Phase 1 uses the AssemblyAI gateway's `fallbacks` field with exactly one backup, `depth: 1`, and no extra retry. Nano falls back to Mini; Mini to Luna; Luna to Mini; Terra to Luna; Sol to Terra; Flash to Luna; Haiku to Mini; Sonnet to Terra; Opus to Sol. Actual returned model IDs are retained in server telemetry and mapped to Zenote IDs in message state when recognized. Missing model metadata remains unknown rather than claiming the selected model responded. Cross-gateway routing remains unimplemented.
+Phase 1 uses the AssemblyAI gateway's `fallbacks` field with exactly one backup, `depth: 1`, and no extra retry. Astra falls back to Sol; Nano falls back to Mini; Mini to Luna; Luna to Mini; Terra to Luna; Sol to Terra; Flash to Luna; Haiku to Mini; Sonnet to Terra; Opus to Sol. Actual returned model IDs are retained in server telemetry and mapped to Zenote IDs in message state when recognized. Missing model metadata remains unknown rather than claiming the selected model responded. Cross-gateway routing remains unimplemented.
 
 OpenAI and Gemini use automatic prompt caching. Claude uses supported message-level ephemeral cache controls on stable context; fallback message overrides remove those controls for OpenAI. Cache usage and cache writes are recorded when supplied by the stream, without estimating missing token counts. Durable accounting, entitlements, and billing limits are not implemented and are required before unrestricted paid-product rollout.
 
@@ -138,4 +139,4 @@ Server-only secrets include Appwrite API keys, AI provider keys, AWS credentials
 
 ## 16. Current vs planned
 
-Appwrite authentication, persisted conversations, private attachment storage, cached multimodal preprocessing and AssemblyAI-backed streaming chat are implemented. The server gateway client uses native fetch with `ASSEMBLYAI_API_KEY` and `ASSEMBLYAI_LLM_BASE_URL` (HTTPS root including `/v1`). AWS Nova/Textract are internal preprocessing paths, not extra picker models. There is no active tool loop. PayMongo, PostHog, Sentry, Resend, durable usage accounting, rate/quota enforcement and additional chat gateways remain unimplemented and must be addressed before unrestricted paid-product rollout.
+Appwrite authentication, persisted conversations, private attachment storage, cached multimodal preprocessing, and AssemblyAI-backed streaming chat are implemented. The AssemblyAI gateway client uses native fetch with `ASSEMBLYAI_API_KEY` and `ASSEMBLYAI_LLM_BASE_URL` (HTTPS root including `/v1`). AWS Nova/Textract are internal preprocessing paths, not extra picker models. There is no active tool loop. PayMongo, PostHog, Sentry, Resend, durable usage accounting, rate/quota enforcement and additional chat gateways (Amazon Bedrock, OpenRouter) remain unimplemented and must be addressed before unrestricted paid-product rollout.
